@@ -474,11 +474,7 @@ app.listen(PORT, () => {
 // Add this to your server.js
 // ============================================================================
 
-// Initialize sync service
-const syncService = new SharePointSyncService(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY
-);
+
 
 app.post('/api/sync/folders', async (req, res) => {
   try {
