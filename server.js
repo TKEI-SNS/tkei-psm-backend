@@ -474,8 +474,6 @@ app.listen(PORT, () => {
 // Add this to your server.js
 // ============================================================================
 
-const SharePointSyncService = require('./sharepoint-sync-service');
-
 // Initialize sync service
 const syncService = new SharePointSyncService(
   process.env.SUPABASE_URL,
