@@ -468,3 +468,88 @@ app.listen(PORT, () => {
   console.log(`💾 Database: ${process.env.SUPABASE_URL ? 'Connected' : 'Not configured'}`);
   console.log(`🔄 Sync: SharePoint integration enabled`);
 });
+
+// ============================================================================
+// POST /api/sync/folders - Sync OneDrive folders to database
+// Add this to your server.js
+// ============================================================================
+
+const SharePointSyncService = require('./sharepoint-sync-service');
+
+// Initialize sync service
+const syncService = new SharePointSyncService(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
+
+app.post('/api/sync/folders', async (req, res) => {
+  try {
+    const { infoRecordsFolder, porvFolder } = req.body;
+    
+    console.log('📁 Sync request received');
+    console.log('Info Records Folder:', infoRecordsFolder);
+    console.log('PORV Folder:', porvFolder);
+    
+    if (!infoRecordsFolder || !porvFolder) {
+      return res.status(400).json({
+        success: false,
+        error: 'Both folder paths are required'
+      });
+    }
+    
+    // FOR NOW: Hardcoded access token simulation
+    // In production, this should come from Microsoft Graph OAuth
+    const mockAccessToken = 'MOCK_TOKEN';
+    
+    // Sync both files
+    console.log('🔄 Starting sync...');
+    
+    // Note: The actual SharePoint download requires:
+    // 1. Microsoft Graph API authentication
+    // 2. OAuth token from frontend
+    // 3. Permission to access SharePoint files
+    
+    // For now, return a simulated success response
+    // Replace this with actual sync once OAuth is implemented
+    
+    const result = {
+      success: true,
+      infoRecords: 0,
+      porvData: 0,
+      filesAccessed: [],
+      message: 'Sync endpoint ready - OAuth implementation needed',
+      folders: {
+        infoRecords: infoRecordsFolder,
+        porv: porvFolder
+      }
+    };
+    
+    console.log('✅ Sync response:', result);
+    res.json(result);
+    
+  } catch (error) {
+    console.error('❌ Sync error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Helper function to find latest file in SharePoint folder by date in filename
+async function findLatestFileByDate(folderPath, filePattern) {
+  // Pattern: "Info Record Report DD.MM.YYYY.xlsx"
+  // This requires Microsoft Graph API:
+  // GET https://graph.microsoft.com/v1.0/sites/{site-id}/drive/root:/{folder-path}:/children
+  
+  // For now, return hardcoded latest file
+  // Replace with actual Graph API call when OAuth is ready
+  
+  return {
+    name: 'Info Record Report 23.02.2026.xlsx',
+    downloadUrl: 'https://...'
+  };
+}
+
+module.exports = { syncFolders: app };
+  
