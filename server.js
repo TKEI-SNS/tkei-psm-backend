@@ -1,9 +1,11 @@
-// server.js - Updated with Part 1 Changes
+// server.js - Updated with Part 1 Changes + Currency + Email + Manual File Upload
 const express = require('express');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
 const { createClient } = require('@supabase/supabase-js');
 const bcrypt = require('bcryptjs');
+const multer = require('multer');
+const XLSX = require('xlsx');
 const SharePointSyncService = require('./sharepoint-sync-service');
 const CalculationService = require('./calculation-service');
 require('dotenv').config();
@@ -29,6 +31,24 @@ const calcService = new CalculationService(
   process.env.SUPABASE_ANON_KEY
 );
 
+// Configure multer for file uploads (in-memory storage)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB max file size
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept only Excel files
+    if (file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+        file.mimetype === 'application/vnd.ms-excel') {
+      cb(null, true);
+    } else {
+      cb(new Error('Only Excel files (.xlsx, .xls) are allowed'));
+    }
+  }
+});
+
+// NOTE: createTransport (not createTransporter)
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: 587,
@@ -43,7 +63,7 @@ app.get('/', (req, res) => {
   res.json({ 
     status: 'online', 
     service: 'TK Elevator Cost Approval API',
-    version: '2.0.0 - Part 1 Updates'
+    version: '2.2.0 - Part 1 + Currency + Email + Manual Upload'
   });
 });
 
@@ -75,7 +95,7 @@ app.post('/api/auth/signup', async (req, res) => {
         username,
         email,
         password: hashedPassword,
-        is_approved: true, // Auto-approve for now
+        is_approved: true,
         created_at: new Date().toISOString()
       }])
       .select();
@@ -136,12 +156,172 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// ==================== SYNC ENDPOINTS ====================
+// ==================== MANUAL FILE UPLOAD SYNC ====================
+
+app.post('/api/sync/upload', upload.fields([
+  { name: 'infoRecordsFile', maxCount: 1 },
+  { name: 'porvFile', maxCount: 1 }
+]), async (req, res) => {
+  try {
+    console.log('📁 File upload sync started');
+    
+    // Validate files received
+    if (!req.files || !req.files.infoRecordsFile || !req.files.porvFile) {
+      return res.status(400).json({
+        success: false,
+        error: 'Both Info Records and PORV files are required'
+      });
+    }
+    
+    const infoFile = req.files.infoRecordsFile[0];
+    const porvFile = req.files.porvFile[0];
+    
+    console.log(`✅ Received files:`, {
+      infoRecords: infoFile.originalname,
+      porv: porvFile.originalname
+    });
+    
+    // Step 1: Parse Info Records file
+    console.log('📊 Parsing Info Records...');
+    const infoRecords = parseInfoRecordsExcel(infoFile.buffer);
+    console.log(`✅ Parsed ${infoRecords.length} info records`);
+    
+    // Step 2: Parse PORV file
+    console.log('📊 Parsing PORV file...');
+    const porvRecords = parsePorvExcel(porvFile.buffer);
+    console.log(`✅ Parsed ${porvRecords.length} PORV records`);
+    
+    // Step 3: Clear existing data
+    console.log('🗑️ Clearing existing data...');
+    await supabase.from('info_records').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    await supabase.from('porv_data').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    console.log('✅ Existing data cleared');
+    
+    // Step 4: Insert new data in batches
+    console.log('💾 Inserting new data...');
+    const infoInserted = await insertInBatches('info_records', infoRecords, 100);
+    const porvInserted = await insertInBatches('porv_data', porvRecords, 100);
+    
+    console.log(`✅ Inserted ${infoInserted} info records`);
+    console.log(`✅ Inserted ${porvInserted} PORV records`);
+    
+    // Step 5: Update sync status
+    await supabase.from('sync_status').insert({
+      sync_type: 'manual_upload',
+      status: 'success',
+      records_synced: infoInserted + porvInserted,
+      synced_by: 'admin',
+      completed_at: new Date().toISOString()
+    });
+    
+    // Return success
+    res.json({
+      success: true,
+      infoRecords: infoInserted,
+      porvData: porvInserted,
+      filesProcessed: [infoFile.originalname, porvFile.originalname],
+      lastSync: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Sync error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
 
 /**
- * Sync Info Records from SharePoint
- * Requires SharePoint access token from frontend
+ * Parse Info Records Excel file
  */
+function parseInfoRecordsExcel(buffer) {
+  try {
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+    const data = XLSX.utils.sheet_to_json(firstSheet, { raw: false });
+    
+    console.log(`📄 Info Records columns:`, Object.keys(data[0] || {}));
+    
+    return data.map(row => ({
+      material_number: (row['Material Number'] || row['Material'] || '').toString().trim(),
+      material_description: (row['Material Description'] || row['Description'] || '').toString().trim(),
+      vendor_account_number: (row['Vendor account number'] || row['Vendor Code'] || '').toString().trim(),
+      supplier_name: (row['Supplier'] || row['Vendor Name'] || '').toString().trim(),
+      amount: parseFloat(row['Amount'] || row['Net Price'] || 0),
+      valid_from: row['Valid From'] || null,
+      valid_to: row['Valid To'] || null,
+      item_vendor_key: `${(row['Material Number'] || '').toString().trim()}-${(row['Vendor account number'] || '').toString().trim()}`
+    })).filter(r => r.material_number && r.vendor_account_number);
+    
+  } catch (error) {
+    throw new Error(`Failed to parse Info Records file: ${error.message}`);
+  }
+}
+
+/**
+ * Parse PORV Excel file (looks for "Working" or "WORKING" sheet)
+ */
+function parsePorvExcel(buffer) {
+  try {
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    
+    // Find "Working" or "WORKING" sheet
+    const sheetName = workbook.SheetNames.find(name => 
+      name.toLowerCase() === 'working'
+    ) || workbook.SheetNames[0];
+    
+    console.log(`📄 Using PORV sheet: "${sheetName}"`);
+    
+    const sheet = workbook.Sheets[sheetName];
+    const data = XLSX.utils.sheet_to_json(sheet, { raw: false });
+    
+    console.log(`📄 PORV columns:`, Object.keys(data[0] || {}));
+    
+    return data.map(row => ({
+      vendor_id: (row['Vendor ID'] || row['Vendor Code'] || '').toString().trim(),
+      item_code: (row['Item Code'] || row['Material Number'] || '').toString().trim(),
+      qty_in_unit_of_entry: parseFloat(row['Qty in unit of entry'] || row['Quantity'] || 0),
+      item_vendor_key: `${(row['Item Code'] || '').toString().trim()}-${(row['Vendor ID'] || '').toString().trim()}`
+    })).filter(r => r.item_code && r.vendor_id && r.qty_in_unit_of_entry > 0);
+    
+  } catch (error) {
+    throw new Error(`Failed to parse PORV file: ${error.message}`);
+  }
+}
+
+/**
+ * Insert records in batches to avoid timeout
+ */
+async function insertInBatches(table, records, batchSize) {
+  let inserted = 0;
+  let failed = 0;
+  
+  for (let i = 0; i < records.length; i += batchSize) {
+    const batch = records.slice(i, i + batchSize);
+    
+    const { error } = await supabase
+      .from(table)
+      .insert(batch);
+    
+    if (error) {
+      console.error(`Batch insert error for ${table}:`, error.message);
+      failed += batch.length;
+    } else {
+      inserted += batch.length;
+    }
+  }
+  
+  if (failed > 0) {
+    console.warn(`⚠️ ${table}: ${failed} records failed to insert`);
+  }
+  
+  return inserted;
+}
+
+// ==================== SYNC ENDPOINTS (SharePoint OAuth - Optional) ====================
+
 app.post('/api/sync/info-records', async (req, res) => {
   try {
     const { accessToken, syncedBy } = req.body;
@@ -171,9 +351,6 @@ app.post('/api/sync/info-records', async (req, res) => {
   }
 });
 
-/**
- * Sync PORV data from SharePoint
- */
 app.post('/api/sync/porv-data', async (req, res) => {
   try {
     const { accessToken, syncedBy } = req.body;
@@ -203,9 +380,6 @@ app.post('/api/sync/porv-data', async (req, res) => {
   }
 });
 
-/**
- * Sync both Info Records and PORV data
- */
 app.post('/api/sync/all', async (req, res) => {
   try {
     const { accessToken, syncedBy } = req.body;
@@ -237,9 +411,6 @@ app.post('/api/sync/all', async (req, res) => {
   }
 });
 
-/**
- * Get sync status - when was data last synced
- */
 app.get('/api/sync/status', async (req, res) => {
   try {
     const status = await syncService.getSyncStatus();
@@ -260,9 +431,6 @@ app.get('/api/sync/status', async (req, res) => {
 
 // ==================== CALCULATION ENDPOINTS ====================
 
-/**
- * Calculate fields for items (Old Price, PORV, Impact)
- */
 app.post('/api/forms/calculate', async (req, res) => {
   try {
     const { items } = req.body;
@@ -290,9 +458,6 @@ app.post('/api/forms/calculate', async (req, res) => {
   }
 });
 
-/**
- * Get next form number
- */
 app.get('/api/forms/next-number', async (req, res) => {
   try {
     const result = await calcService.getNextFormNumber();
@@ -308,9 +473,6 @@ app.get('/api/forms/next-number', async (req, res) => {
   }
 });
 
-/**
- * Lookup old price for specific item-vendor
- */
 app.post('/api/lookup/old-price', async (req, res) => {
   try {
     const { itemCode, vendorCode } = req.body;
@@ -335,9 +497,6 @@ app.post('/api/lookup/old-price', async (req, res) => {
   }
 });
 
-/**
- * Lookup PORV for specific item-vendor
- */
 app.post('/api/lookup/porv', async (req, res) => {
   try {
     const { itemCode, vendorCode } = req.body;
@@ -379,7 +538,8 @@ app.post('/api/forms', async (req, res) => {
       signatories, 
       quarterlyImpact,
       totalImpact,
-      calculationErrors
+      calculationErrors,
+      currencyRates // NEW optional field
     } = req.body;
     
     const { data, error } = await supabase
@@ -398,6 +558,7 @@ app.post('/api/forms', async (req, res) => {
         quarterly_impact: quarterlyImpact,
         total_impact: totalImpact,
         calculation_errors: calculationErrors,
+        currency_rates: currencyRates || null,
         status: 'pending',
         created_at: new Date().toISOString()
       }])
@@ -428,29 +589,31 @@ app.get('/api/forms', async (req, res) => {
   }
 });
 
+// ==================== EMAIL ====================
+
 app.post('/api/send-email', async (req, res) => {
   try {
     const { to, subject, html, formNo } = req.body;
-    
+
+    const formLink = `${process.env.FRONTEND_URL}/signatory-portal-FINAL.html?formNo=${encodeURIComponent(formNo || '')}`;
+
+    const defaultHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <p>Kindly review and Sign the Cost Approval Form, by clicking on the link below -</p>
+        <p>
+          <a href="${formLink}" style="color: #1d4ed8; text-decoration: underline;">
+            ${formLink}
+          </a>
+        </p>
+        <p>[No reply - system generated email]</p>
+      </div>
+    `;
+
     const mailOptions = {
       from: `"TK Elevator Cost Approval" <${process.env.SMTP_USER}>`,
       to,
-      subject: subject || `Cost Approval Form #${formNo} - Signature Required`,
-      html: html || `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #0d3b52;">Cost Approval Form Ready for Signature</h2>
-          <p>Dear Signatory,</p>
-          <p>A cost approval form #${formNo} is ready for your review and signature.</p>
-          <p><a href="${process.env.FRONTEND_URL}/signatory-portal-FINAL.html" 
-                style="background: #10b981; color: white; padding: 12px 24px; 
-                       text-decoration: none; border-radius: 6px; display: inline-block;">
-             View Form & Sign
-          </a></p>
-          <p style="color: #666; font-size: 0.9rem; margin-top: 20px;">
-            This is an automated email from TK Elevator Cost Approval System.
-          </p>
-        </div>
-      `
+      subject: subject || `Cost Approval Form (${formNo}) - Action required`,
+      html: html || defaultHtml
     };
     
     await transporter.sendMail(mailOptions);
@@ -463,87 +626,8 @@ app.post('/api/send-email', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 TK Elevator Cost Approval API v2.0 running on port ${PORT}`);
+  console.log(`🚀 TK Elevator Cost Approval API v2.2 running on port ${PORT}`);
   console.log(`📧 Email: ${process.env.SMTP_USER || 'Not configured'}`);
   console.log(`💾 Database: ${process.env.SUPABASE_URL ? 'Connected' : 'Not configured'}`);
-  console.log(`🔄 Sync: SharePoint integration enabled`);
+  console.log(`🔄 Sync: Manual Upload + SharePoint OAuth enabled`);
 });
-
-// ============================================================================
-// POST /api/sync/folders - Sync OneDrive folders to database
-// Add this to your server.js
-// ============================================================================
-
-
-
-app.post('/api/sync/folders', async (req, res) => {
-  try {
-    const { infoRecordsFolder, porvFolder } = req.body;
-    
-    console.log('📁 Sync request received');
-    console.log('Info Records Folder:', infoRecordsFolder);
-    console.log('PORV Folder:', porvFolder);
-    
-    if (!infoRecordsFolder || !porvFolder) {
-      return res.status(400).json({
-        success: false,
-        error: 'Both folder paths are required'
-      });
-    }
-    
-    // FOR NOW: Hardcoded access token simulation
-    // In production, this should come from Microsoft Graph OAuth
-    const mockAccessToken = 'MOCK_TOKEN';
-    
-    // Sync both files
-    console.log('🔄 Starting sync...');
-    
-    // Note: The actual SharePoint download requires:
-    // 1. Microsoft Graph API authentication
-    // 2. OAuth token from frontend
-    // 3. Permission to access SharePoint files
-    
-    // For now, return a simulated success response
-    // Replace this with actual sync once OAuth is implemented
-    
-    const result = {
-      success: true,
-      infoRecords: 0,
-      porvData: 0,
-      filesAccessed: [],
-      message: 'Sync endpoint ready - OAuth implementation needed',
-      folders: {
-        infoRecords: infoRecordsFolder,
-        porv: porvFolder
-      }
-    };
-    
-    console.log('✅ Sync response:', result);
-    res.json(result);
-    
-  } catch (error) {
-    console.error('❌ Sync error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// Helper function to find latest file in SharePoint folder by date in filename
-async function findLatestFileByDate(folderPath, filePattern) {
-  // Pattern: "Info Record Report DD.MM.YYYY.xlsx"
-  // This requires Microsoft Graph API:
-  // GET https://graph.microsoft.com/v1.0/sites/{site-id}/drive/root:/{folder-path}:/children
-  
-  // For now, return hardcoded latest file
-  // Replace with actual Graph API call when OAuth is ready
-  
-  return {
-    name: 'Info Record Report 23.02.2026.xlsx',
-    downloadUrl: 'https://...'
-  };
-}
-
-module.exports = { syncFolders: app };
-  
