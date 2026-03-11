@@ -13,11 +13,17 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// CORS - Allow all origins including file:// for local testing
+// CORS - Comprehensive configuration
 app.use(cors({
   origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: false
 }));
+
+// Handle preflight
+app.options('*', cors());
+
 app.use(express.json({ limit: '10mb' }));
 
 const supabase = createClient(
