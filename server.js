@@ -209,9 +209,9 @@ app.post('/api/sync/upload', upload.fields([
       // Clear old data first
       await supabase.from('info_records').delete().neq('id', '00000000-0000-0000-0000-000000000000');
       
-      // Process in smaller batches (50 instead of 100)
-      for (let i = 0; i < data.length; i += 50) {
-        const rawBatch = data.slice(i, i + 50);
+      // Process in smaller batches (25 for memory efficiency)
+      for (let i = 0; i < data.length; i += 25) {
+        const rawBatch = data.slice(i, i + 25);
         
         const batch = rawBatch.map(row => {
           // Helper to get value with trimmed column name
@@ -223,12 +223,12 @@ app.post('/api/sync/upload', upload.fields([
           const record = {
             material_number: (getCol('Material') || getCol('FS Code') || '').toString().trim(),
             material_description: (getCol('Material Number') || '').toString().trim(),
-            vendor_account_number: (getCol("Vendor's account number") || '').toString().trim(),
-            supplier_name: (getCol('Supplier') || '').toString().trim(),
+            vendor_account_number: (getCol('Supplier') || '').toString().trim(), // This is the VENDOR CODE
+            supplier_name: (getCol("Vendor's account number") || '').toString().trim(), // This is the VENDOR NAME
             amount: parseFloat(getCol('Amount') || 0),
             valid_from: getCol('Valid From') || null,
             valid_to: getCol('Valid to') || null,
-            item_vendor_key: `${(getCol('Material') || getCol('FS Code') || '').toString().trim()}-${(getCol("Vendor's account number") || '').toString().trim()}`
+            item_vendor_key: `${(getCol('Material') || getCol('FS Code') || '').toString().trim()}-${(getCol('Supplier') || '').toString().trim()}`
           };
           
           // Log first row for debugging
@@ -292,9 +292,9 @@ app.post('/api/sync/upload', upload.fields([
       // Clear old data
       await supabase.from('porv_data').delete().neq('id', '00000000-0000-0000-0000-000000000000');
       
-      // Process in batches
-      for (let i = 0; i < data.length; i += 50) {
-        const rawBatch = data.slice(i, i + 50);
+      // Process in batches (25 for memory)
+      for (let i = 0; i < data.length; i += 25) {
+        const rawBatch = data.slice(i, i + 25);
         
         const batch = rawBatch.map(row => {
           // Helper to get value with trimmed column name
@@ -305,9 +305,9 @@ app.post('/api/sync/upload', upload.fields([
           
           const record = {
             vendor_id: (getCol('Vendor ID') || '').toString().trim(),
-            item_code: (getCol('Item') || '').toString().trim(),
+            item_code: (getCol('Material(GMDS)') || getCol('Item') || '').toString().trim(), // Material(GMDS) is the actual item code
             qty_in_unit_of_entry: parseFloat(getCol('Qty in unit of entry') || 0),
-            item_vendor_key: `${(getCol('Item') || '').toString().trim()}-${(getCol('Vendor ID') || '').toString().trim()}`
+            item_vendor_key: `${(getCol('Material(GMDS)') || getCol('Item') || '').toString().trim()}-${(getCol('Vendor ID') || '').toString().trim()}`
           };
           
           // Log first row
