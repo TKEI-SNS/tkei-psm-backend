@@ -172,74 +172,130 @@ app.post('/api/sync/upload', upload.fields([
   { name: 'infoRecordsFile', maxCount: 1 },
   { name: 'porvFile', maxCount: 1 }
 ]), async (req, res) => {
+  console.log('📁 File upload sync started');
+  
+  // Track memory
+  const memBefore = process.memoryUsage().heapUsed / 1024 / 1024;
+  console.log(`Memory before: ${memBefore.toFixed(2)} MB`);
+  
   try {
-    console.log('📁 File upload sync started');
-    
-    // Validate files received
     if (!req.files || !req.files.infoRecordsFile || !req.files.porvFile) {
       return res.status(400).json({
         success: false,
-        error: 'Both Info Records and PORV files are required'
+        error: 'Both files required'
       });
     }
     
     const infoFile = req.files.infoRecordsFile[0];
     const porvFile = req.files.porvFile[0];
     
-    console.log(`✅ Received files:`, {
-      infoRecords: infoFile.originalname,
-      porv: porvFile.originalname
-    });
+    console.log(`Files: ${infoFile.originalname} (${(infoFile.size/1024).toFixed(2)}KB), ${porvFile.originalname} (${(porvFile.size/1024).toFixed(2)}KB)`);
     
-    // Step 1: Parse Info Records file
-    console.log('📊 Parsing Info Records...');
-    const infoRecords = parseInfoRecordsExcel(infoFile.buffer);
-    console.log(`✅ Parsed ${infoRecords.length} info records`);
+    // Parse and insert Info Records in small batches to save memory
+    console.log('📊 Processing Info Records...');
+    let infoInserted = 0;
+    try {
+      const workbook = XLSX.read(infoFile.buffer, { type: 'buffer', sheetRows: 1000 }); // Limit rows read
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(sheet, { raw: false });
+      
+      // Log detected columns
+      if (data.length > 0) {
+        console.log('📋 Info Records columns found:', Object.keys(data[0]).join(', '));
+      }
+      
+      // Clear old data first
+      await supabase.from('info_records').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      
+      // Process in smaller batches (50 instead of 100)
+      for (let i = 0; i < data.length; i += 50) {
+        const batch = data.slice(i, i + 50).map(row => ({
+          material_number: (row['Material'] || row['FS Code'] || '').toString().trim(),
+          material_description: (row['Material Number'] || '').toString().trim(),
+          vendor_account_number: (row["Vendor's account number"] || row['Vendor account number'] || '').toString().trim(),
+          supplier_name: (row['Supplier'] || '').toString().trim(),
+          amount: parseFloat(row['Amount'] || 0),
+          valid_from: row['Valid From'] || null,
+          valid_to: row['Valid to'] || null,
+          item_vendor_key: `${(row['Material'] || row['FS Code'] || '').toString().trim()}-${(row["Vendor's account number"] || row['Vendor account number'] || '').toString().trim()}`
+        })).filter(r => r.material_number && r.vendor_account_number);
+        
+        const { error } = await supabase.from('info_records').insert(batch);
+        if (!error) infoInserted += batch.length;
+        
+        // Force garbage collection hint
+        if (global.gc && i % 200 === 0) global.gc();
+      }
+      
+      console.log(`✅ Info Records: ${infoInserted}`);
+    } catch (e) {
+      console.error('Info Records error:', e.message);
+      return res.status(400).json({ success: false, error: `Info Records: ${e.message}` });
+    }
     
-    // Step 2: Parse PORV file
-    console.log('📊 Parsing PORV file...');
-    const porvRecords = parsePorvExcel(porvFile.buffer);
-    console.log(`✅ Parsed ${porvRecords.length} PORV records`);
+    // Clear buffer
+    infoFile.buffer = null;
     
-    // Step 3: Clear existing data
-    console.log('🗑️ Clearing existing data...');
-    await supabase.from('info_records').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-    await supabase.from('porv_data').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-    console.log('✅ Existing data cleared');
+    // Parse and insert PORV in small batches
+    console.log('📊 Processing PORV...');
+    let porvInserted = 0;
+    try {
+      const workbook = XLSX.read(porvFile.buffer, { type: 'buffer', sheetRows: 1000 });
+      const sheetName = workbook.SheetNames.find(n => n.toLowerCase() === 'working') || workbook.SheetNames[0];
+      console.log(`📄 Using PORV sheet: "${sheetName}"`);
+      const sheet = workbook.Sheets[sheetName];
+      const data = XLSX.utils.sheet_to_json(sheet, { raw: false });
+      
+      // Log detected columns
+      if (data.length > 0) {
+        console.log('📋 PORV columns found:', Object.keys(data[0]).join(', '));
+      }
+      
+      // Clear old data
+      await supabase.from('porv_data').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      
+      // Process in batches
+      for (let i = 0; i < data.length; i += 50) {
+        const batch = data.slice(i, i + 50).map(row => ({
+          vendor_id: (row['Vendor ID'] || '').toString().trim(),
+          item_code: (row['Item'] || '').toString().trim(),
+          qty_in_unit_of_entry: parseFloat(row['Qty in unit of entry'] || 0),
+          item_vendor_key: `${(row['Item'] || '').toString().trim()}-${(row['Vendor ID'] || '').toString().trim()}`
+        })).filter(r => r.item_code && r.vendor_id && r.qty_in_unit_of_entry > 0);
+        
+        const { error } = await supabase.from('porv_data').insert(batch);
+        if (!error) porvInserted += batch.length;
+        
+        if (global.gc && i % 200 === 0) global.gc();
+      }
+      
+      console.log(`✅ PORV: ${porvInserted}`);
+    } catch (e) {
+      console.error('PORV error:', e.message);
+      return res.status(400).json({ success: false, error: `PORV: ${e.message}` });
+    }
     
-    // Step 4: Insert new data in batches
-    console.log('💾 Inserting new data...');
-    const infoInserted = await insertInBatches('info_records', infoRecords, 100);
-    const porvInserted = await insertInBatches('porv_data', porvRecords, 100);
+    // Clear buffer
+    porvFile.buffer = null;
     
-    console.log(`✅ Inserted ${infoInserted} info records`);
-    console.log(`✅ Inserted ${porvInserted} PORV records`);
+    // Force cleanup
+    if (global.gc) global.gc();
     
-    // Step 5: Update sync status
-    await supabase.from('sync_status').insert({
-      sync_type: 'manual_upload',
-      status: 'success',
-      records_synced: infoInserted + porvInserted,
-      synced_by: 'admin',
-      completed_at: new Date().toISOString()
-    });
+    const memAfter = process.memoryUsage().heapUsed / 1024 / 1024;
+    console.log(`Memory after: ${memAfter.toFixed(2)} MB (diff: ${(memAfter - memBefore).toFixed(2)} MB)`);
     
-    // Return success
     res.json({
       success: true,
       infoRecords: infoInserted,
       porvData: porvInserted,
-      filesProcessed: [infoFile.originalname, porvFile.originalname],
       lastSync: new Date().toISOString()
     });
     
   } catch (error) {
-    console.error('❌ Sync error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
+    console.error('❌ Error:', error.message);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, error: error.message });
+    }
   }
 });
 
