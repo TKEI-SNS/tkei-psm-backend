@@ -211,7 +211,9 @@ app.post('/api/sync/upload', upload.fields([
       
       // Process in smaller batches (50 instead of 100)
       for (let i = 0; i < data.length; i += 50) {
-        const batch = data.slice(i, i + 50).map(row => {
+        const rawBatch = data.slice(i, i + 50);
+        
+        const batch = rawBatch.map(row => {
           // Helper to get value with trimmed column name
           const getCol = (colName) => {
             const key = Object.keys(row).find(k => k.trim() === colName);
@@ -230,7 +232,7 @@ app.post('/api/sync/upload', upload.fields([
           };
           
           // Log first row for debugging
-          if (i === 0 && batch.length === 0) {
+          if (i === 0 && rawBatch.indexOf(row) === 0) {
             console.log('Sample row mapping:', {
               raw: row,
               mapped: record,
@@ -292,7 +294,9 @@ app.post('/api/sync/upload', upload.fields([
       
       // Process in batches
       for (let i = 0; i < data.length; i += 50) {
-        const batch = data.slice(i, i + 50).map(row => {
+        const rawBatch = data.slice(i, i + 50);
+        
+        const batch = rawBatch.map(row => {
           // Helper to get value with trimmed column name
           const getCol = (colName) => {
             const key = Object.keys(row).find(k => k.trim() === colName);
@@ -307,7 +311,7 @@ app.post('/api/sync/upload', upload.fields([
           };
           
           // Log first row
-          if (i === 0 && batch.length === 0) {
+          if (i === 0 && rawBatch.indexOf(row) === 0) {
             console.log('PORV sample row:', {
               raw: row,
               mapped: record,
