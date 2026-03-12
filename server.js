@@ -209,19 +209,47 @@ app.post('/api/sync/upload', upload.fields([
       
       // Process in smaller batches (50 instead of 100)
       for (let i = 0; i < data.length; i += 50) {
-        const batch = data.slice(i, i + 50).map(row => ({
-          material_number: (row['Material'] || row['FS Code'] || '').toString().trim(),
-          material_description: (row['Material Number'] || '').toString().trim(),
-          vendor_account_number: (row["Vendor's account number"] || row['Vendor account number'] || '').toString().trim(),
-          supplier_name: (row['Supplier'] || '').toString().trim(),
-          amount: parseFloat(row['Amount'] || 0),
-          valid_from: row['Valid From'] || null,
-          valid_to: row['Valid to'] || null,
-          item_vendor_key: `${(row['Material'] || row['FS Code'] || '').toString().trim()}-${(row["Vendor's account number"] || row['Vendor account number'] || '').toString().trim()}`
-        })).filter(r => r.material_number && r.vendor_account_number);
+        const batch = data.slice(i, i + 50).map(row => {
+          const record = {
+            material_number: (row['Material'] || row['FS Code'] || '').toString().trim(),
+            material_description: (row['Material Number'] || '').toString().trim(),
+            vendor_account_number: (row["Vendor's account number"] || row['Vendor account number'] || '').toString().trim(),
+            supplier_name: (row['Supplier'] || '').toString().trim(),
+            amount: parseFloat(row['Amount'] || 0),
+            valid_from: row['Valid From'] || null,
+            valid_to: row['Valid to'] || null,
+            item_vendor_key: `${(row['Material'] || row['FS Code'] || '').toString().trim()}-${(row["Vendor's account number"] || row['Vendor account number'] || '').toString().trim()}`
+          };
+          
+          // Log first row for debugging
+          if (i === 0 && batch.length === 0) {
+            console.log('Sample row mapping:', {
+              raw: row,
+              mapped: record,
+              hasItemCode: !!record.material_number,
+              hasVendorCode: !!record.vendor_account_number
+            });
+          }
+          
+          return record;
+        }).filter(r => {
+          const valid = r.material_number && r.vendor_account_number;
+          if (!valid && i === 0) {
+            console.log('Row filtered out:', r);
+          }
+          return valid;
+        });
         
-        const { error } = await supabase.from('info_records').insert(batch);
-        if (!error) infoInserted += batch.length;
+        if (batch.length > 0) {
+          const { error } = await supabase.from('info_records').insert(batch);
+          if (!error) {
+            infoInserted += batch.length;
+          } else {
+            console.error('Batch insert error:', error);
+          }
+        } else if (i === 0) {
+          console.warn('⚠️ First batch is empty - all rows filtered out!');
+        }
         
         // Force garbage collection hint
         if (global.gc && i % 200 === 0) global.gc();
@@ -256,15 +284,44 @@ app.post('/api/sync/upload', upload.fields([
       
       // Process in batches
       for (let i = 0; i < data.length; i += 50) {
-        const batch = data.slice(i, i + 50).map(row => ({
-          vendor_id: (row['Vendor ID'] || '').toString().trim(),
-          item_code: (row['Item'] || '').toString().trim(),
-          qty_in_unit_of_entry: parseFloat(row['Qty in unit of entry'] || 0),
-          item_vendor_key: `${(row['Item'] || '').toString().trim()}-${(row['Vendor ID'] || '').toString().trim()}`
-        })).filter(r => r.item_code && r.vendor_id && r.qty_in_unit_of_entry > 0);
+        const batch = data.slice(i, i + 50).map(row => {
+          const record = {
+            vendor_id: (row['Vendor ID'] || '').toString().trim(),
+            item_code: (row['Item'] || '').toString().trim(),
+            qty_in_unit_of_entry: parseFloat(row['Qty in unit of entry'] || 0),
+            item_vendor_key: `${(row['Item'] || '').toString().trim()}-${(row['Vendor ID'] || '').toString().trim()}`
+          };
+          
+          // Log first row
+          if (i === 0 && batch.length === 0) {
+            console.log('PORV sample row:', {
+              raw: row,
+              mapped: record,
+              hasItem: !!record.item_code,
+              hasVendor: !!record.vendor_id,
+              hasQty: record.qty_in_unit_of_entry > 0
+            });
+          }
+          
+          return record;
+        }).filter(r => {
+          const valid = r.item_code && r.vendor_id && r.qty_in_unit_of_entry > 0;
+          if (!valid && i === 0) {
+            console.log('PORV row filtered:', r);
+          }
+          return valid;
+        });
         
-        const { error } = await supabase.from('porv_data').insert(batch);
-        if (!error) porvInserted += batch.length;
+        if (batch.length > 0) {
+          const { error } = await supabase.from('porv_data').insert(batch);
+          if (!error) {
+            porvInserted += batch.length;
+          } else {
+            console.error('PORV batch insert error:', error);
+          }
+        } else if (i === 0) {
+          console.warn('⚠️ PORV first batch empty - all rows filtered!');
+        }
         
         if (global.gc && i % 200 === 0) global.gc();
       }
