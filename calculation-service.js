@@ -22,19 +22,19 @@ class CalculationService {
       // Step 1: Try exact match
       const { data: exactMatch, error: exactError } = await this.supabase
         .from('info_records_csv')
-        .select('amount, valid_to, material_description, supplier_name, vendor_account_number')
+        .select('"Amount", "Valid to", "Material Number", "Vendor\'s account number", "Supplier"')
         .eq('item_vendor_key', itemVendorKey)
-        .order('valid_to', { ascending: false, nullsFirst: true })
+        .order('"Valid to"', { ascending: false, nullsFirst: true })
         .limit(1);
       
       if (!exactError && exactMatch && exactMatch.length > 0) {
         return {
           found: true,
           exactMatch: true,
-          oldPrice: parseFloat(exactMatch[0].amount),
-          validTo: exactMatch[0].valid_to,
-          materialDescription: exactMatch[0].material_description,
-          supplierName: exactMatch[0].supplier_name,
+          oldPrice: parseFloat(exactMatch[0]['Amount']),
+          validTo: exactMatch[0]['Valid to'],
+          materialDescription: exactMatch[0]['Material Number'],
+          supplierName: exactMatch[0]['Supplier'],
           vendorUsed: vendorAccountNumber,
           remarks: null
         };
@@ -43,21 +43,21 @@ class CalculationService {
       // Step 2: Try any vendor for this item
       const { data: anyVendor, error: anyError } = await this.supabase
         .from('info_records_csv')
-        .select('amount, valid_to, material_description, supplier_name, vendor_account_number')
-        .eq('material_number', materialNumber)
-        .order('valid_to', { ascending: false, nullsFirst: true })
+        .select('"Amount", "Valid to", "Material Number", "Vendor\'s account number", "Supplier"')
+        .eq('"Material"', materialNumber)
+        .order('"Valid to"', { ascending: false, nullsFirst: true })
         .limit(1);
       
       if (!anyError && anyVendor && anyVendor.length > 0) {
         return {
           found: true,
           exactMatch: false,
-          oldPrice: parseFloat(anyVendor[0].amount),
-          validTo: anyVendor[0].valid_to,
-          materialDescription: anyVendor[0].material_description,
-          supplierName: anyVendor[0].supplier_name,
-          vendorUsed: anyVendor[0].vendor_account_number,
-          remarks: `Old price from different vendor: ${anyVendor[0].vendor_account_number} (${anyVendor[0].supplier_name})`
+          oldPrice: parseFloat(anyVendor[0]['Amount']),
+          validTo: anyVendor[0]['Valid to'],
+          materialDescription: anyVendor[0]['Material Number'],
+          supplierName: anyVendor[0]['Supplier'],
+          vendorUsed: anyVendor[0]["Vendor's account number"],
+          remarks: `Old price from different vendor: ${anyVendor[0]["Vendor's account number"]} (${anyVendor[0]['Supplier']})`
         };
       }
       
@@ -90,7 +90,7 @@ class CalculationService {
       // SUM all rows matching item-vendor combo (like Excel SUMIF)
       const { data, error } = await this.supabase
         .from('porv_data_csv')
-        .select('qty_in_unit_of_entry')
+        .select('"Qty in unit of entry"')
         .eq('item_vendor_key', itemVendorKey);
       
       if (error) throw error;
@@ -105,7 +105,7 @@ class CalculationService {
       }
       
       // SUM all matching rows (Excel SUMIF equivalent)
-      const totalPorv = data.reduce((sum, row) => sum + (parseFloat(row.qty_in_unit_of_entry) || 0), 0);
+      const totalPorv = data.reduce((sum, row) => sum + (parseFloat(row['Qty in unit of entry']) || 0), 0);
       
       return {
         found: true,
