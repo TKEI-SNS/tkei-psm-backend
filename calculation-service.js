@@ -1,797 +1,331 @@
-// server.js - Updated with Part 1 Changes + Currency + Email + Manual File Upload
-const express = require('express');
-const cors = require('cors');
-const nodemailer = require('nodemailer');
+// ============================================================================
+// Calculation Service - Price lookups, PORV lookups, Impact calculations
+// ============================================================================
+
 const { createClient } = require('@supabase/supabase-js');
-const bcrypt = require('bcryptjs');
-const multer = require('multer');
-const XLSX = require('xlsx');
-const SharePointSyncService = require('./sharepoint-sync-service');
-const CalculationService = require('./calculation-service');
-require('dotenv').config();
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-// CORS - Comprehensive configuration
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: false
-}));
-
-// Handle preflight
-app.options('*', cors());
-
-app.use(express.json({ limit: '10mb' }));
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
-
-const syncService = new SharePointSyncService(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
-
-const calcService = new CalculationService(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
-
-// Configure multer for file uploads (in-memory storage)
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB max file size
-  },
-  fileFilter: (req, file, cb) => {
-    // Accept only Excel files
-    if (file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
-        file.mimetype === 'application/vnd.ms-excel') {
-      cb(null, true);
-    } else {
-      cb(new Error('Only Excel files (.xlsx, .xls) are allowed'));
-    }
+class CalculationService {
+  constructor(supabaseUrl, supabaseKey) {
+    this.supabase = createClient(supabaseUrl, supabaseKey);
   }
-});
 
-// NOTE: createTransport (not createTransporter)
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: 587,
-  secure: false,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS
-  }
-});
-
-app.get('/', (req, res) => {
-  res.json({ 
-    status: 'online', 
-    service: 'TK Elevator Cost Approval API',
-    version: '2.2.0 - Part 1 + Currency + Email + Manual Upload'
-  });
-});
-
-// ==================== AUTHENTICATION ====================
-
-app.post('/api/auth/signup', async (req, res) => {
-  try {
-    const { username, email, password } = req.body;
-    
-    if (!username || !email || !password) {
-      return res.json({ success: false, error: 'All fields required' });
-    }
-    
-    const { data: existing } = await supabase
-      .from('admin_users')
-      .select('id')
-      .eq('username', username)
-      .single();
-    
-    if (existing) {
-      return res.json({ success: false, error: 'Username already exists' });
-    }
-    
-    const hashedPassword = await bcrypt.hash(password, 10);
-    
-    const { data, error } = await supabase
-      .from('admin_users')
-      .insert([{
-        username,
-        email,
-        password: hashedPassword,
-        is_approved: true,
-        created_at: new Date().toISOString()
-      }])
-      .select();
-    
-    if (error) throw error;
-    
-    res.json({ 
-      success: true, 
-      message: 'Account created successfully',
-      user: { id: data[0].id, username: data[0].username, email: data[0].email }
-    });
-  } catch (error) {
-    console.error('Signup error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { username, password } = req.body;
-    
-    if (!username || !password) {
-      return res.json({ success: false, error: 'Username and password required' });
-    }
-    
-    const { data: user, error } = await supabase
-      .from('admin_users')
-      .select('*')
-      .eq('username', username)
-      .single();
-    
-    if (error || !user) {
-      return res.json({ success: false, error: 'Invalid credentials' });
-    }
-    
-    const validPassword = await bcrypt.compare(password, user.password);
-    if (!validPassword) {
-      return res.json({ success: false, error: 'Invalid credentials' });
-    }
-    
-    await supabase
-      .from('admin_users')
-      .update({ last_login: new Date().toISOString() })
-      .eq('id', user.id);
-    
-    res.json({ 
-      success: true,
-      user: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        name: user.username
-      }
-    });
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ==================== MANUAL FILE UPLOAD SYNC ====================
-
-app.post('/api/sync/upload', upload.fields([
-  { name: 'infoRecordsFile', maxCount: 1 },
-  { name: 'porvFile', maxCount: 1 }
-]), async (req, res) => {
-  console.log('📁 File upload sync started');
-  
-  const memBefore = process.memoryUsage().heapUsed / 1024 / 1024;
-  console.log(`Memory before: ${memBefore.toFixed(2)} MB`);
-  
-  try {
-    if (!req.files || !req.files.infoRecordsFile || !req.files.porvFile) {
-      return res.status(400).json({
-        success: false,
-        error: 'Both files required'
-      });
-    }
-    
-    const infoFile = req.files.infoRecordsFile[0];
-    const porvFile = req.files.porvFile[0];
-    
-    console.log(`Files: ${infoFile.originalname} (${(infoFile.size/1024).toFixed(2)}KB), ${porvFile.originalname} (${(porvFile.size/1024).toFixed(2)}KB)`);
-    
-    // Return immediately - process in background
-    res.json({
-      success: true,
-      message: 'Sync started in background',
-      infoRecords: 0,
-      porvData: 0,
-      processing: true
-    });
-    
-    // Process in background (don't await)
-    processFilesInBackground(infoFile, porvFile).catch(err => {
-      console.error('Background processing error:', err);
-    });
-    
-  } catch (error) {
-    console.error('❌ Error:', error.message);
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, error: error.message });
-    }
-  }
-});
-
-// Background processing function
-async function processFilesInBackground(infoFile, porvFile) {
-  let infoInserted = 0;
-  let porvInserted = 0;
-  
-  try {
-      const workbook = XLSX.read(infoFile.buffer, { type: 'buffer' }); // Read all rows
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const data = XLSX.utils.sheet_to_json(sheet, { raw: false });
-      
-      // Log detected columns
-      if (data.length > 0) {
-        const cols = Object.keys(data[0]);
-        console.log('📋 Info Records columns found:', cols.join(', '));
-        console.log('📋 Trimmed column names:', cols.map(c => `"${c.trim()}"`).join(', '));
-      }
-      
-      // Clear old data first
-      await supabase.from('info_records_csv').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-      
-      // Process in smaller batches (25 for memory efficiency)
-      for (let i = 0; i < data.length; i += 25) {
-        const rawBatch = data.slice(i, i + 25);
-        
-        const batch = rawBatch.map(row => {
-          // Helper to get value with trimmed column name
-          const getCol = (colName) => {
-            const key = Object.keys(row).find(k => k.trim() === colName);
-            return key ? row[key] : '';
-          };
-          
-          const record = {
-            material_number: (getCol('Material') || getCol('FS Code') || '').toString().trim(),
-            material_description: (getCol('Material Number') || '').toString().trim(),
-            vendor_account_number: (getCol('Supplier') || '').toString().trim(), // This is the VENDOR CODE
-            supplier_name: (getCol("Vendor's account number") || '').toString().trim(), // This is the VENDOR NAME
-            amount: parseFloat(getCol('Amount') || 0) || 0, // Fallback to 0 if NaN
-            valid_from: getCol('Valid From') || null,
-            valid_to: getCol('Valid to') || null,
-            item_vendor_key: `${(getCol('Material') || getCol('FS Code') || '').toString().trim()}-${(getCol('Supplier') || '').toString().trim()}`
-          };
-          
-          // Log first row for debugging
-          if (i === 0 && rawBatch.indexOf(row) === 0) {
-            console.log('Sample row mapping:', {
-              raw: row,
-              mapped: record,
-              hasItemCode: !!record.material_number,
-              hasVendorCode: !!record.vendor_account_number
-            });
-          }
-          
-          return record;
-        }).filter(r => {
-          const valid = r.material_number && r.vendor_account_number;
-          if (!valid && i === 0) {
-            console.log('Row filtered out:', r);
-          }
-          return valid;
-        });
-        
-        if (batch.length > 0) {
-          const { error } = await supabase.from('info_records_csv').insert(batch);
-          if (!error) {
-            infoInserted += batch.length;
-          } else {
-            console.error('Batch insert error:', error);
-          }
-        } else if (i === 0) {
-          console.warn('⚠️ First batch is empty - all rows filtered out!');
-        }
-        
-        // Force garbage collection hint
-        if (global.gc && i % 200 === 0) global.gc();
-      }
-      
-      console.log(`✅ Info Records: ${infoInserted}`);
-    } catch (e) {
-      console.error('Info Records error:', e.message);
-      return res.status(400).json({ success: false, error: `Info Records: ${e.message}` });
-    }
-    
-    // Clear buffer
-    infoFile.buffer = null;
-    
-    // Parse and insert PORV in small batches
-    console.log('📊 Processing PORV...');
-    porvInserted = 0; // Reset counter
+  /**
+   * Get old price for item-vendor combination with fallback
+   * 1. Try exact match: Item + Vendor
+   * 2. If not found: Try Item with ANY vendor (latest)
+   * 3. If not found: Mark as "New Item"
+   */
+  async getOldPrice(materialNumber, vendorAccountNumber) {
     try {
-      const workbook = XLSX.read(porvFile.buffer, { type: 'buffer' });
-      const sheetName = workbook.SheetNames.find(n => n.toLowerCase() === 'working') || workbook.SheetNames[0];
-      console.log(`📄 Using PORV sheet: "${sheetName}"`);
-      const sheet = workbook.Sheets[sheetName];
-      const data = XLSX.utils.sheet_to_json(sheet, { raw: false });
+      const itemVendorKey = `${materialNumber}-${vendorAccountNumber}`;
       
-      // Log detected columns
-      if (data.length > 0) {
-        console.log('📋 PORV columns found:', Object.keys(data[0]).join(', '));
+      // Step 1: Try exact match
+      const { data: exactMatch, error: exactError } = await this.supabase
+        .from('info_records_csv')
+        .select('amount, valid_to, material_description, supplier_name, vendor_account_number')
+        .eq('item_vendor_key', itemVendorKey)
+        .order('valid_to', { ascending: false, nullsFirst: true })
+        .limit(1);
+      
+      if (!exactError && exactMatch && exactMatch.length > 0) {
+        return {
+          found: true,
+          exactMatch: true,
+          oldPrice: parseFloat(exactMatch[0].amount),
+          validTo: exactMatch[0].valid_to,
+          materialDescription: exactMatch[0].material_description,
+          supplierName: exactMatch[0].supplier_name,
+          vendorUsed: vendorAccountNumber,
+          remarks: null
+        };
       }
       
-      // Clear old data
-      await supabase.from('porv_data_csv').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      // Step 2: Try any vendor for this item
+      const { data: anyVendor, error: anyError } = await this.supabase
+        .from('info_records_csv')
+        .select('amount, valid_to, material_description, supplier_name, vendor_account_number')
+        .eq('material_number', materialNumber)
+        .order('valid_to', { ascending: false, nullsFirst: true })
+        .limit(1);
       
-      // Process in batches (25 for memory)
-      for (let i = 0; i < data.length; i += 25) {
-        const rawBatch = data.slice(i, i + 25);
-        
-        const batch = rawBatch.map(row => {
-          // Helper to get value with trimmed column name
-          const getCol = (colName) => {
-            const key = Object.keys(row).find(k => k.trim() === colName);
-            return key ? row[key] : '';
-          };
-          
-          const record = {
-            vendor_id: (getCol('Vendor ID') || '').toString().trim(),
-            item_code: (getCol('Material(GMDS)') || getCol('Item') || '').toString().trim(), // Material(GMDS) is the actual item code
-            qty_in_unit_of_entry: parseFloat(getCol('Qty in unit of entry') || 0),
-            item_vendor_key: `${(getCol('Material(GMDS)') || getCol('Item') || '').toString().trim()}-${(getCol('Vendor ID') || '').toString().trim()}`
-          };
-          
-          // Log first row
-          if (i === 0 && rawBatch.indexOf(row) === 0) {
-            console.log('PORV sample row:', {
-              raw: row,
-              mapped: record,
-              hasItem: !!record.item_code,
-              hasVendor: !!record.vendor_id,
-              hasQty: record.qty_in_unit_of_entry > 0
-            });
-          }
-          
-          return record;
-        }).filter(r => {
-          const valid = r.item_code && r.vendor_id && r.qty_in_unit_of_entry > 0;
-          if (!valid && i === 0) {
-            console.log('PORV row filtered:', r);
-          }
-          return valid;
-        });
-        
-        if (batch.length > 0) {
-          const { error } = await supabase.from('porv_data_csv').insert(batch);
-          if (!error) {
-            porvInserted += batch.length;
-          } else {
-            console.error('PORV batch insert error:', error);
-          }
-        } else if (i === 0) {
-          console.warn('⚠️ PORV first batch empty - all rows filtered!');
-        }
-        
-        if (global.gc && i % 200 === 0) global.gc();
+      if (!anyError && anyVendor && anyVendor.length > 0) {
+        return {
+          found: true,
+          exactMatch: false,
+          oldPrice: parseFloat(anyVendor[0].amount),
+          validTo: anyVendor[0].valid_to,
+          materialDescription: anyVendor[0].material_description,
+          supplierName: anyVendor[0].supplier_name,
+          vendorUsed: anyVendor[0].vendor_account_number,
+          remarks: `Old price from different vendor: ${anyVendor[0].vendor_account_number} (${anyVendor[0].supplier_name})`
+        };
       }
       
-      console.log(`✅ PORV: ${porvInserted}`);
-    } catch (e) {
-      console.error('PORV error:', e.message);
-      return res.status(400).json({ success: false, error: `PORV: ${e.message}` });
-    }
-    
-    // Clear buffer
-    porvFile.buffer = null;
-    
-    // Force cleanup
-    if (global.gc) global.gc();
-    
-    const memAfter = process.memoryUsage().heapUsed / 1024 / 1024;
-    console.log(`Memory after: ${memAfter.toFixed(2)} MB (diff: ${(memAfter - memBefore).toFixed(2)} MB)`);
-    
-    res.json({
-      success: true,
-      infoRecords: infoInserted,
-      porvData: porvInserted,
-      lastSync: new Date().toISOString()
-    });
-    
-  } catch (error) {
-    console.error('❌ Error:', error.message);
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, error: error.message });
+      // Step 3: Item not found at all
+      return {
+        found: false,
+        exactMatch: false,
+        oldPrice: null,
+        remarks: 'New Item - No pricing history available'
+      };
+      
+    } catch (error) {
+      return {
+        found: false,
+        oldPrice: null,
+        error: error.message,
+        remarks: `Error: ${error.message}`
+      };
     }
   }
-});
 
-/**
- * Parse Info Records Excel file
- */
-function parseInfoRecordsExcel(buffer) {
-  try {
-    const workbook = XLSX.read(buffer, { type: 'buffer' });
-    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-    const data = XLSX.utils.sheet_to_json(firstSheet, { raw: false });
-    
-    console.log(`📄 Info Records columns:`, Object.keys(data[0] || {}));
-    
-    return data.map(row => ({
-      material_number: (row['Material Number'] || row['Material'] || '').toString().trim(),
-      material_description: (row['Material Description'] || row['Description'] || '').toString().trim(),
-      vendor_account_number: (row['Vendor account number'] || row['Vendor Code'] || '').toString().trim(),
-      supplier_name: (row['Supplier'] || row['Vendor Name'] || '').toString().trim(),
-      amount: parseFloat(row['Amount'] || row['Net Price'] || 0),
-      valid_from: row['Valid From'] || null,
-      valid_to: row['Valid To'] || null,
-      item_vendor_key: `${(row['Material Number'] || '').toString().trim()}-${(row['Vendor account number'] || '').toString().trim()}`
-    })).filter(r => r.material_number && r.vendor_account_number);
-    
-  } catch (error) {
-    throw new Error(`Failed to parse Info Records file: ${error.message}`);
-  }
-}
-
-/**
- * Parse PORV Excel file (looks for "Working" or "WORKING" sheet)
- */
-function parsePorvExcel(buffer) {
-  try {
-    const workbook = XLSX.read(buffer, { type: 'buffer' });
-    
-    // Find "Working" or "WORKING" sheet
-    const sheetName = workbook.SheetNames.find(name => 
-      name.toLowerCase() === 'working'
-    ) || workbook.SheetNames[0];
-    
-    console.log(`📄 Using PORV sheet: "${sheetName}"`);
-    
-    const sheet = workbook.Sheets[sheetName];
-    const data = XLSX.utils.sheet_to_json(sheet, { raw: false });
-    
-    console.log(`📄 PORV columns:`, Object.keys(data[0] || {}));
-    
-    return data.map(row => ({
-      vendor_id: (row['Vendor ID'] || row['Vendor Code'] || '').toString().trim(),
-      item_code: (row['Item Code'] || row['Material Number'] || '').toString().trim(),
-      qty_in_unit_of_entry: parseFloat(row['Qty in unit of entry'] || row['Quantity'] || 0),
-      item_vendor_key: `${(row['Item Code'] || '').toString().trim()}-${(row['Vendor ID'] || '').toString().trim()}`
-    })).filter(r => r.item_code && r.vendor_id && r.qty_in_unit_of_entry > 0);
-    
-  } catch (error) {
-    throw new Error(`Failed to parse PORV file: ${error.message}`);
-  }
-}
-
-/**
- * Insert records in batches to avoid timeout
- */
-async function insertInBatches(table, records, batchSize) {
-  let inserted = 0;
-  let failed = 0;
-  
-  for (let i = 0; i < records.length; i += batchSize) {
-    const batch = records.slice(i, i + batchSize);
-    
-    const { error } = await supabase
-      .from(table)
-      .insert(batch);
-    
-    if (error) {
-      console.error(`Batch insert error for ${table}:`, error.message);
-      failed += batch.length;
-    } else {
-      inserted += batch.length;
+  /**
+   * Get PORV quantity for item-vendor combination
+   * Uses SUM to replicate Excel SUMIF formula
+   */
+  async getPorvQuantity(itemCode, vendorId) {
+    try {
+      const itemVendorKey = `${itemCode}-${vendorId}`;
+      
+      // SUM all rows matching item-vendor combo (like Excel SUMIF)
+      const { data, error } = await this.supabase
+        .from('porv_data_csv')
+        .select('qty_in_unit_of_entry')
+        .eq('item_vendor_key', itemVendorKey);
+      
+      if (error) throw error;
+      
+      if (!data || data.length === 0) {
+        // No PORV data found - this is OK for new items
+        return {
+          found: false,
+          porv: 0,
+          warning: `No PORV data found for Item: ${itemCode}, Vendor: ${vendorId}. Using 0.`
+        };
+      }
+      
+      // SUM all matching rows (Excel SUMIF equivalent)
+      const totalPorv = data.reduce((sum, row) => sum + (parseFloat(row.qty_in_unit_of_entry) || 0), 0);
+      
+      return {
+        found: true,
+        porv: totalPorv,
+        rowCount: data.length
+      };
+      
+    } catch (error) {
+      return {
+        found: false,
+        porv: 0,
+        error: error.message
+      };
     }
   }
-  
-  if (failed > 0) {
-    console.warn(`⚠️ ${table}: ${failed} records failed to insert`);
-  }
-  
-  return inserted;
-}
 
-// ==================== SYNC ENDPOINTS (SharePoint OAuth - Optional) ====================
-
-app.post('/api/sync/info-records', async (req, res) => {
-  try {
-    const { accessToken, syncedBy } = req.body;
+  /**
+   * Calculate all fields for a single item
+   */
+  async calculateItem(item) {
+    const {
+      itemCode,
+      itemDescription,
+      vendorCode,
+      vendorName,
+      newPrice
+    } = item;
     
-    if (!accessToken) {
-      return res.status(400).json({
+    // Validate inputs
+    if (!itemCode || !vendorCode || newPrice === undefined || newPrice === null) {
+      return {
         success: false,
-        error: 'SharePoint access token required. Please authenticate with Microsoft.'
-      });
+        error: 'Missing required fields: itemCode, vendorCode, newPrice'
+      };
     }
     
-    const result = await syncService.syncInfoRecords(accessToken, syncedBy || 'unknown');
-    
-    res.json({
-      success: true,
-      message: 'Info Records synced successfully',
-      ...result
-    });
-    
-  } catch (error) {
-    console.error('Info Records sync error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      details: 'Failed to sync Info Records from SharePoint'
-    });
-  }
-});
-
-app.post('/api/sync/porv-data', async (req, res) => {
-  try {
-    const { accessToken, syncedBy } = req.body;
-    
-    if (!accessToken) {
-      return res.status(400).json({
-        success: false,
-        error: 'SharePoint access token required. Please authenticate with Microsoft.'
-      });
-    }
-    
-    const result = await syncService.syncPorvData(accessToken, syncedBy || 'unknown');
-    
-    res.json({
-      success: true,
-      message: 'PORV data synced successfully',
-      ...result
-    });
-    
-  } catch (error) {
-    console.error('PORV sync error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      details: 'Failed to sync PORV data from SharePoint'
-    });
-  }
-});
-
-app.post('/api/sync/all', async (req, res) => {
-  try {
-    const { accessToken, syncedBy } = req.body;
-    
-    if (!accessToken) {
-      return res.status(400).json({
-        success: false,
-        error: 'SharePoint access token required. Please authenticate with Microsoft.'
-      });
-    }
-    
-    const results = await syncService.syncAll(accessToken, syncedBy || 'unknown');
-    
-    res.json({
-      success: results.errors.length === 0,
-      message: results.errors.length === 0 
-        ? 'All data synced successfully' 
-        : 'Sync completed with errors',
-      ...results
-    });
-    
-  } catch (error) {
-    console.error('Full sync error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      details: 'Failed to complete full sync'
-    });
-  }
-});
-
-app.get('/api/sync/status', async (req, res) => {
-  try {
-    const status = await syncService.getSyncStatus();
-    
-    res.json({
-      success: true,
-      ...status
-    });
-    
-  } catch (error) {
-    console.error('Get sync status error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// ==================== CALCULATION ENDPOINTS ====================
-
-app.post('/api/forms/calculate', async (req, res) => {
-  try {
-    const { items } = req.body;
-    
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'Items array required'
-      });
-    }
-    
-    const results = await calcService.calculateItems(items);
-    
-    res.json({
-      success: true,
-      ...results
-    });
-    
-  } catch (error) {
-    console.error('Calculate error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-app.get('/api/forms/next-number', async (req, res) => {
-  try {
-    const result = await calcService.getNextFormNumber();
-    
-    res.json(result);
-    
-  } catch (error) {
-    console.error('Get next form number error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-app.post('/api/lookup/old-price', async (req, res) => {
-  try {
-    const { itemCode, vendorCode } = req.body;
-    
-    if (!itemCode || !vendorCode) {
-      return res.status(400).json({
-        success: false,
-        error: 'itemCode and vendorCode required'
-      });
-    }
-    
-    const result = await calcService.getOldPrice(itemCode, vendorCode);
-    
-    res.json(result);
-    
-  } catch (error) {
-    console.error('Lookup old price error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-app.post('/api/lookup/porv', async (req, res) => {
-  try {
-    const { itemCode, vendorCode } = req.body;
-    
-    if (!itemCode || !vendorCode) {
-      return res.status(400).json({
-        success: false,
-        error: 'itemCode and vendorCode required'
-      });
-    }
-    
-    const result = await calcService.getPorvQuantity(itemCode, vendorCode);
-    
-    res.json(result);
-    
-  } catch (error) {
-    console.error('Lookup PORV error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-// ==================== FORMS API ====================
-
-app.post('/api/forms', async (req, res) => {
-  try {
-    const { 
-      formNo, 
-      autoFormNo,
-      vendor, 
-      vendorCode, 
-      date, 
-      category, 
-      note, 
-      items,
-      itemsCalculated,
-      signatories, 
-      quarterlyImpact,
-      totalImpact,
-      calculationErrors,
-      currencyRates // NEW optional field
-    } = req.body;
-    
-    const { data, error } = await supabase
-      .from('forms')
-      .insert([{
-        form_no: formNo,
-        auto_form_no: autoFormNo,
-        vendor,
-        vendor_code: vendorCode,
-        date,
-        category,
-        note,
-        items,
-        items_calculated: itemsCalculated,
-        signatories,
-        quarterly_impact: quarterlyImpact,
-        total_impact: totalImpact,
-        calculation_errors: calculationErrors,
-        currency_rates: currencyRates || null,
-        status: 'pending',
-        created_at: new Date().toISOString()
-      }])
-      .select();
-    
-    if (error) throw error;
-    
-    res.json({ success: true, data: data[0] });
-  } catch (error) {
-    console.error('Create form error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-app.get('/api/forms', async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('forms')
-      .select('*')
-      .order('created_at', { ascending: false });
-    
-    if (error) throw error;
-    
-    res.json({ success: true, data });
-  } catch (error) {
-    console.error('Get forms error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ==================== EMAIL ====================
-
-app.post('/api/send-email', async (req, res) => {
-  try {
-    const { to, subject, html, formNo } = req.body;
-
-    const formLink = `${process.env.FRONTEND_URL}/signatory-portal-FINAL.html?formNo=${encodeURIComponent(formNo || '')}`;
-
-    const defaultHtml = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <p>Kindly review and Sign the Cost Approval Form, by clicking on the link below -</p>
-        <p>
-          <a href="${formLink}" style="color: #1d4ed8; text-decoration: underline;">
-            ${formLink}
-          </a>
-        </p>
-        <p>[No reply - system generated email]</p>
-      </div>
-    `;
-
-    const mailOptions = {
-      from: `"TK Elevator Cost Approval" <${process.env.SMTP_USER}>`,
-      to,
-      subject: subject || `Cost Approval Form (${formNo}) - Action required`,
-      html: html || defaultHtml
+    const result = {
+      itemCode,
+      itemDescription,
+      vendorCode,
+      vendorName,
+      newPrice: parseFloat(newPrice),
+      oldPrice: null,
+      priceDiff: null,
+      percentDiff: null,
+      porv: null,
+      impact: null,
+      remarks: '',
+      errors: [],
+      warnings: []
     };
     
-    await transporter.sendMail(mailOptions);
+    // Get old price (with fallback logic)
+    const oldPriceResult = await this.getOldPrice(itemCode, vendorCode);
+    if (oldPriceResult.found) {
+      result.oldPrice = oldPriceResult.oldPrice;
+      
+      // Add remarks if price from different vendor or new item
+      if (oldPriceResult.remarks) {
+        result.remarks = oldPriceResult.remarks;
+        if (!oldPriceResult.exactMatch) {
+          result.warnings.push(oldPriceResult.remarks);
+        }
+      }
+      
+      // Use description from DB if not provided
+      if (!result.itemDescription && oldPriceResult.materialDescription) {
+        result.itemDescription = oldPriceResult.materialDescription;
+      }
+      if (!result.vendorName && oldPriceResult.supplierName) {
+        result.vendorName = oldPriceResult.supplierName;
+      }
+    } else {
+      // New item or error
+      result.remarks = oldPriceResult.remarks || 'New Item';
+      if (oldPriceResult.error) {
+        result.errors.push(oldPriceResult.error);
+      } else {
+        result.warnings.push(oldPriceResult.remarks);
+      }
+    }
     
-    res.json({ success: true, message: 'Email sent successfully' });
-  } catch (error) {
-    console.error('Send email error:', error);
-    res.status(500).json({ success: false, error: error.message });
+    // Get PORV
+    const porvResult = await this.getPorvQuantity(itemCode, vendorCode);
+    if (porvResult.found) {
+      result.porv = porvResult.porv;
+    } else {
+      if (porvResult.warning) {
+        result.warnings.push(porvResult.warning);
+      }
+      if (porvResult.error) {
+        result.errors.push(porvResult.error);
+      }
+      result.porv = 0; // Default to 0 if no PORV found
+    }
+    
+    // Calculate derived fields if we have old price
+    if (result.oldPrice !== null) {
+      result.priceDiff = result.oldPrice - result.newPrice;
+      
+      if (result.oldPrice !== 0) {
+        result.percentDiff = (result.priceDiff / result.oldPrice) * 100;
+      } else {
+        result.percentDiff = 0;
+        result.warnings.push('Old price is 0, cannot calculate % difference');
+      }
+      
+      result.impact = result.porv * result.priceDiff;
+    }
+    
+    result.success = result.errors.length === 0;
+    
+    return result;
   }
-});
 
-app.listen(PORT, () => {
-  console.log(`🚀 TK Elevator Cost Approval API v2.2 running on port ${PORT}`);
-  console.log(`📧 Email: ${process.env.SMTP_USER || 'Not configured'}`);
-  console.log(`💾 Database: ${process.env.SUPABASE_URL ? 'Connected' : 'Not configured'}`);
-  console.log(`🔄 Sync: Manual Upload + SharePoint OAuth enabled`);
-});
+  /**
+   * Calculate all fields for multiple items
+   */
+  async calculateItems(items) {
+    const results = [];
+    
+    for (const item of items) {
+      const calculated = await this.calculateItem(item);
+      results.push(calculated);
+    }
+    
+    // Calculate totals
+    const totalImpact = results
+      .filter(r => r.impact !== null)
+      .reduce((sum, r) => sum + r.impact, 0);
+    
+    const hasErrors = results.some(r => r.errors.length > 0);
+    const hasWarnings = results.some(r => r.warnings.length > 0);
+    
+    return {
+      items: results,
+      summary: {
+        totalItems: results.length,
+        successfulCalculations: results.filter(r => r.success).length,
+        failedCalculations: results.filter(r => !r.success).length,
+        totalImpact,
+        hasErrors,
+        hasWarnings
+      }
+    };
+  }
+
+  /**
+   * Get next form number
+   */
+  async getNextFormNumber() {
+    try {
+      const today = new Date();
+      const yymmdd = today.toISOString()
+        .slice(2, 10)
+        .replace(/-/g, '');
+      
+      // Find highest sequence for today
+      const { data, error } = await this.supabase
+        .from('forms')
+        .select('auto_form_no')
+        .like('auto_form_no', `${yymmdd}_%`)
+        .order('auto_form_no', { ascending: false })
+        .limit(1);
+      
+      if (error) throw error;
+      
+      let nextSequence = 1;
+      
+      if (data && data.length > 0) {
+        const lastFormNo = data[0].auto_form_no;
+        const lastSequence = parseInt(lastFormNo.split('_')[1]);
+        nextSequence = lastSequence + 1;
+      }
+      
+      const formNumber = `${yymmdd}_${String(nextSequence).padStart(3, '0')}`;
+      
+      return {
+        success: true,
+        formNumber,
+        date: yymmdd
+      };
+      
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Format currency for display
+   */
+  formatCurrency(amount) {
+    if (amount === null || amount === undefined) return 'N/A';
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      minimumFractionDigits: 2
+    }).format(amount);
+  }
+
+  /**
+   * Format percentage for display
+   */
+  formatPercentage(percent) {
+    if (percent === null || percent === undefined) return 'N/A';
+    return `${percent.toFixed(2)}%`;
+  }
+
+  /**
+   * Get impact indicator (positive/negative/neutral)
+   */
+  getImpactIndicator(impact) {
+    if (impact === null) return 'unknown';
+    if (impact > 0) return 'savings';
+    if (impact < 0) return 'increase';
+    return 'neutral';
+  }
+}
+
+module.exports = CalculationService;
