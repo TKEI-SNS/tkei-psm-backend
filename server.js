@@ -174,7 +174,6 @@ app.post('/api/sync/upload', upload.fields([
 ]), async (req, res) => {
   console.log('📁 File upload sync started');
   
-  // Track memory
   const memBefore = process.memoryUsage().heapUsed / 1024 / 1024;
   console.log(`Memory before: ${memBefore.toFixed(2)} MB`);
   
@@ -191,11 +190,35 @@ app.post('/api/sync/upload', upload.fields([
     
     console.log(`Files: ${infoFile.originalname} (${(infoFile.size/1024).toFixed(2)}KB), ${porvFile.originalname} (${(porvFile.size/1024).toFixed(2)}KB)`);
     
-    // Parse and insert Info Records in small batches to save memory
-    console.log('📊 Processing Info Records...');
-    let infoInserted = 0;
-    try {
-      const workbook = XLSX.read(infoFile.buffer, { type: 'buffer', sheetRows: 1000 }); // Limit rows read
+    // Return immediately - process in background
+    res.json({
+      success: true,
+      message: 'Sync started in background',
+      infoRecords: 0,
+      porvData: 0,
+      processing: true
+    });
+    
+    // Process in background (don't await)
+    processFilesInBackground(infoFile, porvFile).catch(err => {
+      console.error('Background processing error:', err);
+    });
+    
+  } catch (error) {
+    console.error('❌ Error:', error.message);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  }
+});
+
+// Background processing function
+async function processFilesInBackground(infoFile, porvFile) {
+  let infoInserted = 0;
+  let porvInserted = 0;
+  
+  try {
+      const workbook = XLSX.read(infoFile.buffer, { type: 'buffer' }); // Read all rows
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const data = XLSX.utils.sheet_to_json(sheet, { raw: false });
       
@@ -207,7 +230,7 @@ app.post('/api/sync/upload', upload.fields([
       }
       
       // Clear old data first
-      await supabase.from('info_records').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      await supabase.from('info_records_csv').delete().neq('id', '00000000-0000-0000-0000-000000000000');
       
       // Process in smaller batches (25 for memory efficiency)
       for (let i = 0; i < data.length; i += 25) {
@@ -225,7 +248,7 @@ app.post('/api/sync/upload', upload.fields([
             material_description: (getCol('Material Number') || '').toString().trim(),
             vendor_account_number: (getCol('Supplier') || '').toString().trim(), // This is the VENDOR CODE
             supplier_name: (getCol("Vendor's account number") || '').toString().trim(), // This is the VENDOR NAME
-            amount: parseFloat(getCol('Amount') || 0),
+            amount: parseFloat(getCol('Amount') || 0) || 0, // Fallback to 0 if NaN
             valid_from: getCol('Valid From') || null,
             valid_to: getCol('Valid to') || null,
             item_vendor_key: `${(getCol('Material') || getCol('FS Code') || '').toString().trim()}-${(getCol('Supplier') || '').toString().trim()}`
@@ -251,7 +274,7 @@ app.post('/api/sync/upload', upload.fields([
         });
         
         if (batch.length > 0) {
-          const { error } = await supabase.from('info_records').insert(batch);
+          const { error } = await supabase.from('info_records_csv').insert(batch);
           if (!error) {
             infoInserted += batch.length;
           } else {
@@ -278,7 +301,7 @@ app.post('/api/sync/upload', upload.fields([
     console.log('📊 Processing PORV...');
     let porvInserted = 0;
     try {
-      const workbook = XLSX.read(porvFile.buffer, { type: 'buffer', sheetRows: 1000 });
+      const workbook = XLSX.read(porvFile.buffer, { type: 'buffer' });
       const sheetName = workbook.SheetNames.find(n => n.toLowerCase() === 'working') || workbook.SheetNames[0];
       console.log(`📄 Using PORV sheet: "${sheetName}"`);
       const sheet = workbook.Sheets[sheetName];
@@ -290,7 +313,7 @@ app.post('/api/sync/upload', upload.fields([
       }
       
       // Clear old data
-      await supabase.from('porv_data').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      await supabase.from('porv_data_csv').delete().neq('id', '00000000-0000-0000-0000-000000000000');
       
       // Process in batches (25 for memory)
       for (let i = 0; i < data.length; i += 25) {
@@ -331,7 +354,7 @@ app.post('/api/sync/upload', upload.fields([
         });
         
         if (batch.length > 0) {
-          const { error } = await supabase.from('porv_data').insert(batch);
+          const { error } = await supabase.from('porv_data_csv').insert(batch);
           if (!error) {
             porvInserted += batch.length;
           } else {
