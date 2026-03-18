@@ -21,7 +21,7 @@ class CalculationService {
       
       // Step 1: Try exact match
       const { data: exactMatch, error: exactError } = await this.supabase
-        .from('info_records')
+        .from('info_records_csv')
         .select('amount, valid_to, material_description, supplier_name, vendor_account_number')
         .eq('item_vendor_key', itemVendorKey)
         .order('valid_to', { ascending: false, nullsFirst: true })
@@ -42,7 +42,7 @@ class CalculationService {
       
       // Step 2: Try any vendor for this item
       const { data: anyVendor, error: anyError } = await this.supabase
-        .from('info_records')
+        .from('info_records_csv')
         .select('amount, valid_to, material_description, supplier_name, vendor_account_number')
         .eq('material_number', materialNumber)
         .order('valid_to', { ascending: false, nullsFirst: true })
@@ -81,32 +81,36 @@ class CalculationService {
 
   /**
    * Get PORV quantity for item-vendor combination
+   * Uses SUM to replicate Excel SUMIF formula
    */
   async getPorvQuantity(itemCode, vendorId) {
     try {
       const itemVendorKey = `${itemCode}-${vendorId}`;
       
+      // SUM all rows matching item-vendor combo (like Excel SUMIF)
       const { data, error } = await this.supabase
-        .from('porv_data')
+        .from('porv_data_csv')
         .select('qty_in_unit_of_entry')
-        .eq('item_vendor_key', itemVendorKey)
-        .single();
+        .eq('item_vendor_key', itemVendorKey);
       
-      if (error) {
-        // No data found is not an error for PORV - could be new item
-        if (error.code === 'PGRST116') {
-          return {
-            found: false,
-            porv: 0,
-            warning: `No PORV data found for Item: ${itemCode}, Vendor: ${vendorId}. Using 0.`
-          };
-        }
-        throw error;
+      if (error) throw error;
+      
+      if (!data || data.length === 0) {
+        // No PORV data found - this is OK for new items
+        return {
+          found: false,
+          porv: 0,
+          warning: `No PORV data found for Item: ${itemCode}, Vendor: ${vendorId}. Using 0.`
+        };
       }
+      
+      // SUM all matching rows (Excel SUMIF equivalent)
+      const totalPorv = data.reduce((sum, row) => sum + (parseFloat(row.qty_in_unit_of_entry) || 0), 0);
       
       return {
         found: true,
-        porv: parseFloat(data.qty_in_unit_of_entry) || 0
+        porv: totalPorv,
+        rowCount: data.length
       };
       
     } catch (error) {
