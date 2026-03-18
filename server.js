@@ -299,7 +299,7 @@ async function processFilesInBackground(infoFile, porvFile) {
     
     // Parse and insert PORV in small batches
     console.log('📊 Processing PORV...');
-    let porvInserted = 0;
+    porvInserted = 0; // Reset counter
     try {
       const workbook = XLSX.read(porvFile.buffer, { type: 'buffer' });
       const sheetName = workbook.SheetNames.find(n => n.toLowerCase() === 'working') || workbook.SheetNames[0];
