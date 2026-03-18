@@ -31,7 +31,7 @@ class CalculationService {
         return {
           found: true,
           exactMatch: true,
-          oldPrice: parseFloat(exactMatch[0]['Amount']),
+          oldPrice: parseFloat(String(exactMatch[0]['Amount']).replace(/,/g, '')),
           validTo: exactMatch[0]['Valid to'],
           materialDescription: exactMatch[0]['Material Number'],
           supplierName: exactMatch[0]['Supplier'],
@@ -52,7 +52,7 @@ class CalculationService {
         return {
           found: true,
           exactMatch: false,
-          oldPrice: parseFloat(anyVendor[0]['Amount']),
+          oldPrice: parseFloat(String(anyVendor[0]['Amount']).replace(/,/g, '')),
           validTo: anyVendor[0]['Valid to'],
           materialDescription: anyVendor[0]['Material Number'],
           supplierName: anyVendor[0]['Supplier'],
