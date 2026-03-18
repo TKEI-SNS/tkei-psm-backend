@@ -442,9 +442,9 @@ app.post('/api/send-email', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 TK Elevator Cost Approval API v2.1 running on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 TK Elevator Cost Approval API v2.2 running on port ${PORT}`);
   console.log(`📧 Email: ${process.env.SMTP_USER || 'Not configured'}`);
   console.log(`💾 Database: ${process.env.SUPABASE_URL ? 'Connected' : 'Not configured'}`);
-  console.log(`🔄 Sync: SharePoint integration enabled`);
+  console.log(`🔄 Sync: Manual Upload + SharePoint OAuth enabled`);
 });
