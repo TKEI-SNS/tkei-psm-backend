@@ -441,6 +441,133 @@ app.post('/api/send-email', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+// ==========================================
+// NEW ENDPOINT: Create Form with Calculations
+// POST /api/forms/create
+// ==========================================
+
+app.post('/api/forms/create', async (req, res) => {
+  try {
+    const { items } = req.body; // Array of {itemCode, itemDescription, vendorCode, vendorName, newPrice, currency}
+    
+    console.log(`📝 Creating form with ${items.length} items`);
+    
+    // 1. Generate form number
+    const { data: formNumData, error: formNumError } = await supabase
+      .rpc('get_next_form_number');
+    
+    if (formNumError) throw formNumError;
+    const formNumber = formNumData;
+    const formSequence = parseInt(formNumber.split('_')[3]);
+    
+    console.log(`✅ Form number: ${formNumber}`);
+    
+    // 2. Process each item
+    const formRows = [];
+    
+    for (const item of items) {
+      // Calculate values using SQL function
+      const { data: calcData, error: calcError } = await supabase
+        .rpc('calculate_form_row', {
+          p_item_code: item.itemCode,
+          p_vendor_code: item.vendorCode,
+          p_new_price: item.newPrice
+        });
+      
+      if (calcError) {
+        console.error('Calculation error:', calcError);
+        continue;
+      }
+      
+      const calc = calcData[0];
+      
+      // Create row
+      const row = {
+        id: `${formNumber}_${item.itemCode}_${item.vendorCode}`,
+        form_number: formNumber,
+        form_sequence: formSequence,
+        item_code: item.itemCode,
+        item_description: item.itemDescription || '',
+        vendor_code: item.vendorCode,
+        vendor_name: item.vendorName || '',
+        new_price: item.newPrice,
+        currency: item.currency || 'INR',
+        old_price: calc.old_price,
+        price_diff: calc.price_diff,
+        percent_diff: calc.percent_diff,
+        porv_qty: calc.porv_qty,
+        impact: calc.impact,
+        remarks: calc.remarks
+      };
+      
+      formRows.push(row);
+    }
+    
+    // 3. Insert all rows
+    const { data: insertData, error: insertError } = await supabase
+      .from('cost_approval_forms')
+      .insert(formRows)
+      .select();
+    
+    if (insertError) throw insertError;
+    
+    console.log(`✅ Inserted ${insertData.length} rows`);
+    
+    // 4. Return form data
+    res.json({
+      success: true,
+      formNumber: formNumber,
+      items: insertData,
+      summary: {
+        totalItems: insertData.length,
+        totalImpact: insertData.reduce((sum, r) => sum + (parseFloat(r.impact) || 0), 0)
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Form creation error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// ==========================================
+// NEW ENDPOINT: Get Form Data
+// GET /api/forms/:formNumber
+// ==========================================
+
+app.get('/api/forms/:formNumber', async (req, res) => {
+  try {
+    const { formNumber } = req.params;
+    
+    const { data, error } = await supabase
+      .from('cost_approval_forms')
+      .select('*')
+      .eq('form_number', formNumber)
+      .order('item_code');
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      formNumber: formNumber,
+      items: data,
+      summary: {
+        totalItems: data.length,
+        totalImpact: data.reduce((sum, r) => sum + (parseFloat(r.impact) || 0), 0)
+      }
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 TK Elevator Cost Approval API v2.2 running on port ${PORT}`);
