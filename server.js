@@ -567,6 +567,107 @@ app.get('/api/forms/:formNumber', async (req, res) => {
     });
   }
 });
+// ==========================================
+// ENDPOINT: Upload Pre-Calculated Form
+// POST /api/forms/upload-precalc
+// ==========================================
+
+app.post('/api/forms/upload-precalc', async (req, res) => {
+  try {
+    const { items } = req.body; 
+    // items = [{itemCode, itemDescription, vendorCode, vendorName, newPrice, currency, 
+    //           oldPrice, priceDiff, percentDiff, porvQty, impact, remarks}]
+    
+    // 1. Generate form number
+    const { data: formNumData, error: formNumError } = await supabase
+      .rpc('get_next_form_number');
+    if (formNumError) throw formNumError;
+    
+    const formNumber = formNumData;
+    const formSequence = parseInt(formNumber.split('_')[3]);
+    
+    // 2. Insert rows directly (no calculation needed)
+    const formRows = items.map(item => ({
+      id: `${formNumber}_${item.itemCode}_${item.vendorCode}`,
+      form_number: formNumber,
+      form_sequence: formSequence,
+      item_code: item.itemCode,
+      item_description: item.itemDescription || '',
+      vendor_code: item.vendorCode,
+      vendor_name: item.vendorName || '',
+      new_price: item.newPrice,
+      currency: item.currency || 'INR',
+      old_price: item.oldPrice || 0,
+      price_diff: item.priceDiff || 0,
+      percent_diff: item.percentDiff || 0,
+      porv_qty: item.porvQty || 0,
+      impact: item.impact || 0,
+      remarks: item.remarks || 'Pre-calculated'
+    }));
+    
+    const { data: insertData, error: insertError } = await supabase
+      .from('cost_approval_forms')
+      .insert(formRows)
+      .select();
+    
+    if (insertError) throw insertError;
+    
+    res.json({
+      success: true,
+      formNumber: formNumber,
+      items: insertData,
+      summary: {
+        totalItems: insertData.length,
+        totalImpact: insertData.reduce((sum, r) => sum + (parseFloat(r.impact) || 0), 0)
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Pre-calc upload error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==========================================
+// ENDPOINT: Send Email with Attachments
+// POST /api/send-email-with-attachments
+// ==========================================
+
+app.post('/api/send-email-with-attachments', async (req, res) => {
+  try {
+    const { to, formNo, formLink, attachments } = req.body;
+    // attachments = [{filename, content: base64, contentType}]
+    
+    const mailOptions = {
+      from: `"TK Elevator Cost Approval" <${process.env.SMTP_USER}>`,
+      to,
+      subject: `Cost Approval Form (${formNo}) - Action required`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px;">
+          <h2>Cost Approval Form - Signature Required</h2>
+          <p>Form Number: <strong>${formNo}</strong></p>
+          <p>Please review and sign the form:</p>
+          <p><a href="${formLink}" style="color: #1d4ed8;">${formLink}</a></p>
+          ${attachments?.length ? `<p><strong>Attachments:</strong> ${attachments.length} file(s) included</p>` : ''}
+          <p style="color: #666; font-size: 0.9em;">[No reply - system generated email]</p>
+        </div>
+      `,
+      attachments: attachments?.map(att => ({
+        filename: att.filename,
+        content: att.content,
+        encoding: 'base64',
+        contentType: att.contentType
+      })) || []
+    };
+    
+    await transporter.sendMail(mailOptions);
+    
+    res.json({ success: true, message: 'Email sent with attachments' });
+  } catch (error) {
+    console.error('Email error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 
 app.listen(PORT, '0.0.0.0', () => {
