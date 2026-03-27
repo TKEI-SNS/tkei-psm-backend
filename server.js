@@ -629,6 +629,67 @@ app.post('/api/forms/upload-precalc', async (req, res) => {
 });
 
 // ==========================================
+// ENDPOINT: Upload Pre-Calculated Form
+// POST /api/forms/upload-precalc
+// ==========================================
+
+app.post('/api/forms/upload-precalc', async (req, res) => {
+  try {
+    const { items } = req.body; 
+    // items = [{itemCode, itemDescription, vendorCode, vendorName, newPrice, currency, 
+    //           oldPrice, priceDiff, percentDiff, porvQty, impact, remarks}]
+    
+    // 1. Generate form number
+    const { data: formNumData, error: formNumError } = await supabase
+      .rpc('get_next_form_number');
+    if (formNumError) throw formNumError;
+    
+    const formNumber = formNumData;
+    const formSequence = parseInt(formNumber.split('_')[3]);
+    
+    // 2. Insert rows directly (no calculation needed)
+    const formRows = items.map(item => ({
+      id: `${formNumber}_${item.itemCode}_${item.vendorCode}`,
+      form_number: formNumber,
+      form_sequence: formSequence,
+      item_code: item.itemCode,
+      item_description: item.itemDescription || '',
+      vendor_code: item.vendorCode,
+      vendor_name: item.vendorName || '',
+      new_price: item.newPrice,
+      currency: item.currency || 'INR',
+      old_price: item.oldPrice || 0,
+      price_diff: item.priceDiff || 0,
+      percent_diff: item.percentDiff || 0,
+      porv_qty: item.porvQty || 0,
+      impact: item.impact || 0,
+      remarks: item.remarks || 'Pre-calculated'
+    }));
+    
+    const { data: insertData, error: insertError } = await supabase
+      .from('cost_approval_forms')
+      .insert(formRows)
+      .select();
+    
+    if (insertError) throw insertError;
+    
+    res.json({
+      success: true,
+      formNumber: formNumber,
+      items: insertData,
+      summary: {
+        totalItems: insertData.length,
+        totalImpact: insertData.reduce((sum, r) => sum + (parseFloat(r.impact) || 0), 0)
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Pre-calc upload error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==========================================
 // ENDPOINT: Send Email with Attachments
 // POST /api/send-email-with-attachments
 // ==========================================
