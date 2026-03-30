@@ -454,7 +454,7 @@ app.post('/api/send-email', async (req, res) => {
         <a href="${formLink}" class="button">REVIEW & SIGN DOCUMENT</a>
       </center>
       
-      <p>Or copy this link: <br><a href="${formLink}">${formLink}</a></p>
+  //    <p>Or copy this link: <br><a href="${formLink}">${formLink}</a></p>
       
       <p><strong>Important:</strong></p>
       <ul>
