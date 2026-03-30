@@ -804,7 +804,6 @@ app.get('/api/forms/:formNumber', async (req, res) => {
 
 // Start server
 app.listen(PORT, '0.0.0.0', () => {
-app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 TK Elevator Cost Approval API v2.2 running on port ${PORT}`);
   console.log(`📧 Email: ${process.env.SMTP_USER || 'Not configured'}`);
   console.log(`💾 Database: ${process.env.SUPABASE_URL ? 'Connected' : 'Not configured'}`);
