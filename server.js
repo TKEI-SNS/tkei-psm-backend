@@ -774,7 +774,36 @@ app.post('/api/send-email-with-attachments', async (req, res) => {
   }
 });
 
+// GET form by number (for signatory portal)
+app.get('/api/forms/:formNumber', async (req, res) => {
+  try {
+    const { formNumber } = req.params;
+    
+    const { data, error } = await supabase
+      .from('cost_approval_forms')
+      .select('*')
+      .eq('form_number', formNumber)
+      .order('item_code');
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      formNumber: formNumber,
+      items: data,
+      summary: {
+        totalItems: data.length,
+        totalImpact: data.reduce((s, r) => s + (parseFloat(r.impact) || 0), 0)
+      }
+    });
+    
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
+// Start server
+app.listen(PORT, '0.0.0.0', () => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 TK Elevator Cost Approval API v2.2 running on port ${PORT}`);
   console.log(`📧 Email: ${process.env.SMTP_USER || 'Not configured'}`);
