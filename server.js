@@ -408,36 +408,80 @@ app.get('/api/forms', async (req, res) => {
 
 // ==================== EMAIL ====================
 
+// PRODUCTION EMAIL ENDPOINT
 app.post('/api/send-email', async (req, res) => {
   try {
-    const { to, subject, html, formNo } = req.body;
-
-    const formLink = `${process.env.FRONTEND_URL}/signatory-portal-FINAL.html?formNo=${encodeURIComponent(formNo || '')}`;
-
-    const defaultHtml = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <p>Kindly review and Sign the Cost Approval Form, by clicking on the link below -</p>
-        <p>
-          <a href="${formLink}" style="color: #1d4ed8; text-decoration: underline;">
-            ${formLink}
-          </a>
-        </p>
-        <p>[No reply - system generated email]</p>
-      </div>
-    `;
-
+    const { to, formNo, formLink, signerName, signerRole } = req.body;
+    
     const mailOptions = {
       from: `"TK Elevator Cost Approval" <${process.env.SMTP_USER}>`,
-      to,
-      subject: subject || `Cost Approval Form (${formNo}) - Action required`,
-      html: html || defaultHtml
+      to: to,
+      subject: `Action Required: Cost Approval Form ${formNo} - Your Signature Needed`,
+      html: `
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: #1a1a2e; color: white; padding: 20px; text-align: center; }
+    .content { background: #f9f9f9; padding: 30px; border-radius: 8px; margin: 20px 0; }
+    .button { display: inline-block; background: #e94560; color: white; padding: 12px 30px; 
+              text-decoration: none; border-radius: 5px; margin: 20px 0; font-weight: bold; }
+    .footer { text-align: center; color: #666; font-size: 12px; margin-top: 30px; }
+    .info-box { background: #fff; border-left: 4px solid #e94560; padding: 15px; margin: 15px 0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>TK Elevator Cost Approval</h1>
+      <p>Document Signature Required</p>
+    </div>
+    
+    <div class="content">
+      <h2>Hello ${signerName},</h2>
+      
+      <p>You have been designated as <strong>${signerRole}</strong> for Cost Approval Form <strong>${formNo}</strong>.</p>
+      
+      <div class="info-box">
+        <strong>Action Required:</strong> Please review and sign the cost approval document.
+      </div>
+      
+      <p>To review and sign the document, click the button below:</p>
+      
+      <center>
+        <a href="${formLink}" class="button">REVIEW & SIGN DOCUMENT</a>
+      </center>
+      
+      <p>Or copy this link: <br><a href="${formLink}">${formLink}</a></p>
+      
+      <p><strong>Important:</strong></p>
+      <ul>
+        <li>This document requires your electronic signature</li>
+        <li>Please review all details carefully before signing</li>
+        <li>Contact the initiator if you have any questions</li>
+      </ul>
+    </div>
+    
+    <div class="footer">
+      <p>This is an automated email from TK Elevator India, PSM Cost Approval System</p>
+      <p>Please do not reply to this email</p>
+      <p>&copy; ${new Date().getFullYear()} TK Elevator India Pvt Ltd</p>
+    </div>
+  </div>
+</body>
+</html>
+      `
     };
     
     await transporter.sendMail(mailOptions);
+    console.log('✅ Email sent to:', to);
     
-    res.json({ success: true, message: 'Email sent successfully' });
+    res.json({ success: true, message: 'Email sent' });
+    
   } catch (error) {
-    console.error('Send email error:', error);
+    console.error('❌ Email error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
