@@ -407,11 +407,13 @@ app.get('/api/forms', async (req, res) => {
 });
 
 // ==================== EMAIL ====================
-
-// PRODUCTION EMAIL ENDPOINT
+// REPLACE EMAIL ENDPOINT IN server.js
 app.post('/api/send-email', async (req, res) => {
   try {
-    const { to, formNo, formLink, signerName, signerRole } = req.body;
+    const { to, formNo, signerName, signerRole } = req.body;
+    
+    // Correct link to signatory portal
+    const formLink = `https://tkei-psm-portals.pages.dev/signatory-portal.html?form=${formNo}`;
     
     const mailOptions = {
       from: `"TK Elevator Cost Approval" <${process.env.SMTP_USER}>`,
@@ -454,18 +456,18 @@ app.post('/api/send-email', async (req, res) => {
         <a href="${formLink}" class="button">REVIEW & SIGN DOCUMENT</a>
       </center>
       
-  //    <p>Or copy this link: <br><a href="${formLink}">${formLink}</a></p>
+      <p>Or copy this link:<br><a href="${formLink}">${formLink}</a></p>
       
       <p><strong>Important:</strong></p>
       <ul>
         <li>This document requires your electronic signature</li>
         <li>Please review all details carefully before signing</li>
-        <li>Contact the initiator if you have any questions</li>
+        <li>Contact the initiator if you have questions</li>
       </ul>
     </div>
     
     <div class="footer">
-      <p>This is an automated email from TK Elevator India, PSM Cost Approval System</p>
+      <p>This is an automated email from TK Elevator Cost Approval System</p>
       <p>Please do not reply to this email</p>
       <p>&copy; ${new Date().getFullYear()} TK Elevator India Pvt Ltd</p>
     </div>
@@ -485,6 +487,8 @@ app.post('/api/send-email', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
+ 
 // ==========================================
 // NEW ENDPOINT: Create Form with Calculations
 // POST /api/forms/create
