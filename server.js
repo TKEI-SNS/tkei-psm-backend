@@ -680,59 +680,54 @@ app.post('/api/forms/upload-precalc', async (req, res) => {
 // ENDPOINT: Upload Pre-Calculated Form
 // POST /api/forms/upload-precalc
 // ==========================================
-
+// SIMPLIFIED: Direct insert from 12-column file
 app.post('/api/forms/upload-precalc', async (req, res) => {
   try {
-    const { items } = req.body; 
-    // items = [{itemCode, itemDescription, vendorCode, vendorName, newPrice, currency, 
-    //           oldPrice, priceDiff, percentDiff, porvQty, impact, remarks}]
+    const { items } = req.body;
     
-    // 1. Generate form number
-    const { data: formNumData, error: formNumError } = await supabase
+    // Get form number
+    const { data: formNum, error: fnErr } = await supabase
       .rpc('get_next_form_number');
-    if (formNumError) throw formNumError;
+    if (fnErr) throw fnErr;
     
-    const formNumber = formNumData;
-    const formSequence = parseInt(formNumber.split('_')[3]);
+    console.log('Form:', formNum, 'Items:', items.length);
     
-    // 2. Insert rows directly (no calculation needed)
-    const formRows = items.map(item => ({
-      id: `${formNumber}_${item.itemCode}_${item.vendorCode}`,
-      form_number: formNumber,
-      form_sequence: formSequence,
-      item_code: item.itemCode,
-      item_description: item.itemDescription || '',
-      vendor_code: item.vendorCode,
-      vendor_name: item.vendorName || '',
-      new_price: item.newPrice,
+    // Direct insert - map columns exactly as uploaded
+    const rows = items.map(item => ({
+      id: `${formNum}_${item.item_code}_${item.vendor_code}`,
+      form_number: formNum,
+      form_sequence: parseInt(formNum.split('_')[3]),
+      item_code: item.item_code,
+      item_description: item.item_description,
+      vendor_code: item.vendor_code,
+      vendor_name: item.vendor_name,
+      new_price: parseFloat(item.new_price) || 0,
       currency: item.currency || 'INR',
-      old_price: item.oldPrice || 0,
-      price_diff: item.priceDiff || 0,
-      percent_diff: item.percentDiff || 0,
-      porv_qty: item.porvQty || 0,
-      impact: item.impact || 0,
-      remarks: item.remarks || 'Pre-calculated'
+      old_price: parseFloat(item.old_price) || 0,
+      price_diff: parseFloat(item.price_diff) || 0,
+      percent_diff: parseFloat(item.percent_diff) || 0,
+      porv_qty: parseFloat(item.porv_qty) || 0,
+      impact: parseFloat(item.impact) || 0,
+      remarks: item.remarks || ''
     }));
     
-    const { data: insertData, error: insertError } = await supabase
+    const { data, error } = await supabase
       .from('cost_approval_forms')
-      .insert(formRows)
+      .insert(rows)
       .select();
     
-    if (insertError) throw insertError;
+    if (error) throw error;
+    
+    console.log('✅ Inserted:', data.length);
     
     res.json({
       success: true,
-      formNumber: formNumber,
-      items: insertData,
-      summary: {
-        totalItems: insertData.length,
-        totalImpact: insertData.reduce((sum, r) => sum + (parseFloat(r.impact) || 0), 0)
-      }
+      formNumber: formNum,
+      items: data
     });
     
   } catch (error) {
-    console.error('❌ Pre-calc upload error:', error);
+    console.error('❌', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
