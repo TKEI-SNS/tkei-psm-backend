@@ -408,87 +408,38 @@ app.get('/api/forms', async (req, res) => {
 
 // ==================== EMAIL ====================
 // REPLACE EMAIL ENDPOINT IN server.js
+// REPLACE in server.js
 app.post('/api/send-email', async (req, res) => {
   try {
     const { to, formNo, signerName, signerRole } = req.body;
-    
-    // Correct link to signatory portal
     const formLink = `https://tkei-psm-portals.pages.dev/signatory-portal.html?form=${formNo}`;
     
-    const mailOptions = {
-      from: `"TK Elevator Cost Approval" <${process.env.SMTP_USER}>`,
+    await transporter.sendMail({
+      from: `"TK Elevator" <${process.env.SMTP_USER}>`,
       to: to,
-      subject: `Action Required: Cost Approval Form ${formNo} - Your Signature Needed`,
-      html: `
-<!DOCTYPE html>
-<html>
-<head>
-  <style>
-    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-    .header { background: #1a1a2e; color: white; padding: 20px; text-align: center; }
-    .content { background: #f9f9f9; padding: 30px; border-radius: 8px; margin: 20px 0; }
-    .button { display: inline-block; background: #e94560; color: white; padding: 12px 30px; 
-              text-decoration: none; border-radius: 5px; margin: 20px 0; font-weight: bold; }
-    .footer { text-align: center; color: #666; font-size: 12px; margin-top: 30px; }
-    .info-box { background: #fff; border-left: 4px solid #e94560; padding: 15px; margin: 15px 0; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="header">
-      <h1>TK Elevator Cost Approval</h1>
-      <p>Document Signature Required</p>
-    </div>
+      subject: `Action Required: Form ${formNo} - Sign Document`,
+      html: `<div style="font-family:Arial;max-width:600px;margin:0 auto;padding:20px;">
+<div style="background:#1a1a2e;color:white;padding:20px;text-align:center;"><h1>TK Elevator Cost Approval</h1></div>
+<div style="padding:30px;background:#f9f9f9;margin:20px 0;">
+<h2>Hello ${signerName},</h2>
+<p>You are designated as <strong>${signerRole}</strong> for Form <strong>${formNo}</strong>.</p>
+<div style="background:#fff;border-left:4px solid #e94560;padding:15px;margin:15px 0;"><strong>Action Required:</strong> Review and sign the document.</div>
+<center><a href="${formLink}" style="display:inline-block;background:#e94560;color:white;padding:12px 30px;text-decoration:none;border-radius:5px;margin:20px 0;font-weight:bold;">REVIEW & SIGN</a></center>
+<p>Link: <a href="${formLink}">${formLink}</a></p>
+</div>
+<div style="text-align:center;color:#666;font-size:12px;">
+<p>Automated email - Do not reply</p>
+<p>&copy; 2026 TK Elevator India</p>
+</div></div>`
+    });
     
-    <div class="content">
-      <h2>Hello ${signerName},</h2>
-      
-      <p>You have been designated as <strong>${signerRole}</strong> for Cost Approval Form <strong>${formNo}</strong>.</p>
-      
-      <div class="info-box">
-        <strong>Action Required:</strong> Please review and sign the cost approval document.
-      </div>
-      
-      <p>To review and sign the document, click the button below:</p>
-      
-      <center>
-        <a href="${formLink}" class="button">REVIEW & SIGN DOCUMENT</a>
-      </center>
-      
-      <p>Or copy this link:<br><a href="${formLink}">${formLink}</a></p>
-      
-      <p><strong>Important:</strong></p>
-      <ul>
-        <li>This document requires your electronic signature</li>
-        <li>Please review all details carefully before signing</li>
-        <li>Contact the initiator if you have questions</li>
-      </ul>
-    </div>
-    
-    <div class="footer">
-      <p>This is an automated email from TK Elevator Cost Approval System</p>
-      <p>Please do not reply to this email</p>
-      <p>&copy; ${new Date().getFullYear()} TK Elevator India Pvt Ltd</p>
-    </div>
-  </div>
-</body>
-</html>
-      `
-    };
-    
-    await transporter.sendMail(mailOptions);
-    console.log('✅ Email sent to:', to);
-    
-    res.json({ success: true, message: 'Email sent' });
-    
+    console.log('✅ Email sent:', to);
+    res.json({ success: true });
   } catch (error) {
-    console.error('❌ Email error:', error);
+    console.error('❌ Email:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
-
- 
 // ==========================================
 // NEW ENDPOINT: Create Form with Calculations
 // POST /api/forms/create
