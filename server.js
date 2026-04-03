@@ -474,8 +474,7 @@ app.post('/api/forms/create', async (req, res) => {
     p_vendor_name: item.vendorName,
     p_new_price: parseFloat(item.newPrice),
     p_currency: item.currency || 'INR'
-})
-    .single();    
+})  
       if (calcError) {
         console.error('Calculation error:', calcError);
         continue;
