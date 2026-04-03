@@ -468,14 +468,14 @@ app.post('/api/forms/create', async (req, res) => {
       // Calculate values using SQL function
       const { data: calcData, error: calcError } = await supabase
         .rpc('calculate_form_row', {
-  p_item_code: item.itemCode,
-  p_item_description: item.itemDesc,
-  p_vendor_code: item.vendorCode,
-  p_vendor_name: item.vendorName,
-  p_new_price: item.newPrice,
-  p_currency: item.currency
+    p_item_code: item.itemCode,
+    p_item_description: item.itemDesc,
+    p_vendor_code: item.vendorCode,
+    p_vendor_name: item.vendorName,
+    p_new_price: parseFloat(item.newPrice),
+    p_currency: item.currency || 'INR'
 })
-      
+    .single();    
       if (calcError) {
         console.error('Calculation error:', calcError);
         continue;
