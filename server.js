@@ -469,7 +469,7 @@ app.post('/api/forms/create', async (req, res) => {
       const { data: calcData, error: calcError } = await supabase
         .rpc('calculate_form_row', {
     p_item_code: item.itemCode,
-    p_item_description: item.itemDesc,
+    p_item_description: item.itemDescription,
     p_vendor_code: item.vendorCode,
     p_vendor_name: item.vendorName,
     p_new_price: parseFloat(item.newPrice),
