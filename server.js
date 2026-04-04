@@ -466,13 +466,15 @@ app.post('/api/forms/create', async (req, res) => {
     
     for (const item of items) {
       // Calculate values using SQL function
+      const cleanPrice = parseFloat(String(item.newPrice).replace(/,/g, ''));
+  
       const { data: calcData, error: calcError } = await supabase
         .rpc('calculate_form_row', {
     p_item_code: item.itemCode,
     p_item_description: item.itemDescription,
     p_vendor_code: item.vendorCode,
     p_vendor_name: item.vendorName,
-    p_new_price: item.newPrice,
+    p_new_price: cleanPrice,
     p_currency: item.currency || 'INR'
 })  
       if (calcError) {
