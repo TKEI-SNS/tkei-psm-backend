@@ -444,39 +444,38 @@ app.post('/api/send-email', async (req, res) => {
 // NEW ENDPOINT: Create Form with Calculations
 // POST /api/forms/create
 // ==========================================
-
+// REPLACE /api/forms/create endpoint in server.js
 app.post('/api/forms/create', async (req, res) => {
   try {
-    const { items } = req.body; // Array of {itemCode, itemDescription, vendorCode, vendorName, newPrice, currency}
-    
+    const { items } = req.body;
     console.log(`📝 Creating form with ${items.length} items`);
     
-    // 1. Generate form number
+    // Get form number
     const { data: formNumData, error: formNumError } = await supabase
       .rpc('get_next_form_number');
-    
     if (formNumError) throw formNumError;
+    
     const formNumber = formNumData;
     const formSequence = parseInt(formNumber.split('_')[3]);
-    
     console.log(`✅ Form number: ${formNumber}`);
     
-    // 2. Process each item
+    // Process items
     const formRows = [];
     
     for (const item of items) {
-      // Calculate values using SQL function
-      const cleanPrice = parseFloat(String(item.newPrice).replace(/,/g, ''));
-  
+      // Clean all numeric values - remove ALL commas
+      const cleanPrice = parseFloat(String(item.newPrice || 0).replace(/,/g, ''));
+      
       const { data: calcData, error: calcError } = await supabase
         .rpc('calculate_form_row', {
-    p_item_code: item.itemCode,
-    p_item_description: item.itemDescription,
-    p_vendor_code: item.vendorCode,
-    p_vendor_name: item.vendorName,
-    p_new_price: cleanPrice,
-    p_currency: item.currency || 'INR'
-})  
+          p_item_code: String(item.itemCode),
+          p_item_description: String(item.itemDescription || ''),
+          p_vendor_code: String(item.vendorCode),
+          p_vendor_name: String(item.vendorName || ''),
+          p_new_price: cleanPrice,
+          p_currency: String(item.currency || 'INR')
+        });
+      
       if (calcError) {
         console.error('Calculation error:', calcError);
         continue;
@@ -484,29 +483,26 @@ app.post('/api/forms/create', async (req, res) => {
       
       const calc = calcData[0];
       
-      // Create row
-      const row = {
+      formRows.push({
         id: `${formNumber}_${item.itemCode}_${item.vendorCode}`,
         form_number: formNumber,
         form_sequence: formSequence,
-        item_code: item.itemCode,
-        item_description: item.itemDescription || '',
-        vendor_code: item.vendorCode,
-        vendor_name: item.vendorName || '',
-        new_price: item.newPrice,
-        currency: item.currency || 'INR',
-        old_price: calc.old_price,
-        price_diff: calc.price_diff,
-        percent_diff: calc.percent_diff,
-        porv_qty: calc.porv_qty,
-        impact: calc.impact,
-        remarks: calc.remarks
-      };
-      
-      formRows.push(row);
+        item_code: String(item.itemCode),
+        item_description: String(item.itemDescription || ''),
+        vendor_code: String(item.vendorCode),
+        vendor_name: String(item.vendorName || ''),
+        new_price: cleanPrice,
+        currency: String(item.currency || 'INR'),
+        old_price: parseFloat(calc.old_price || 0),
+        price_diff: parseFloat(calc.price_diff || 0),
+        percent_diff: parseFloat(calc.percent_diff || 0),
+        porv_qty: parseFloat(calc.porv_qty || 0),
+        impact: parseFloat(calc.impact || 0),
+        remarks: String(calc.remarks || 'Calculated')
+      });
     }
     
-    // 3. Insert all rows
+    // Insert to DB
     const { data: insertData, error: insertError } = await supabase
       .from('cost_approval_forms')
       .insert(formRows)
@@ -516,23 +512,15 @@ app.post('/api/forms/create', async (req, res) => {
     
     console.log(`✅ Inserted ${insertData.length} rows`);
     
-    // 4. Return form data
     res.json({
       success: true,
       formNumber: formNumber,
-      items: insertData,
-      summary: {
-        totalItems: insertData.length,
-        totalImpact: insertData.reduce((sum, r) => sum + (parseFloat(r.impact) || 0), 0)
-      }
+      items: insertData
     });
     
   } catch (error) {
     console.error('❌ Form creation error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
