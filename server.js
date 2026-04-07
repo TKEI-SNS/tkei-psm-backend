@@ -32,7 +32,7 @@ const calcService = new CalculationService(
 // NOTE: createTransport (not createTransporter)
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
-  port: 587,
+  port: 465,
   secure: false,
   auth: {
     user: process.env.SMTP_USER,
