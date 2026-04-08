@@ -408,35 +408,28 @@ app.get('/api/forms', async (req, res) => {
 
 // ==================== EMAIL ====================
 // REPLACE EMAIL ENDPOINT IN server.js
-// REPLACE in server.js
+const resend = require('resend').Resend(process.env.RESEND_API_KEY);
+
 app.post('/api/send-email', async (req, res) => {
   try {
-    const { to, formNo, signerName, signerRole } = req.body;
-    const formLink = `https://tkei-psm-portals.pages.dev/signatory-portal.html?form=${formNo}`;
+    const { to, formNo, formLink, signerName, signerRole } = req.body;
     
-    await transporter.sendMail({
-      from: `"TK Elevator" <${process.env.SMTP_USER}>`,
-      to: to,
-      subject: `Action Required: Form ${formNo} - Sign Document`,
-      html: `<div style="font-family:Arial;max-width:600px;margin:0 auto;padding:20px;">
-<div style="background:#1a1a2e;color:white;padding:20px;text-align:center;"><h1>TK Elevator Cost Approval</h1></div>
-<div style="padding:30px;background:#f9f9f9;margin:20px 0;">
-<h2>Hello ${signerName},</h2>
-<p>You are designated as <strong>${signerRole}</strong> for Form <strong>${formNo}</strong>.</p>
-<div style="background:#fff;border-left:4px solid #e94560;padding:15px;margin:15px 0;"><strong>Action Required:</strong> Review and sign the document.</div>
-<center><a href="${formLink}" style="display:inline-block;background:#e94560;color:white;padding:12px 30px;text-decoration:none;border-radius:5px;margin:20px 0;font-weight:bold;">REVIEW & SIGN</a></center>
-<p>Link: <a href="${formLink}">${formLink}</a></p>
-</div>
-<div style="text-align:center;color:#666;font-size:12px;">
-<p>Automated email - Do not reply</p>
-<p>&copy; 2026 TK Elevator India</p>
-</div></div>`
+    await resend.emails.send({
+      from: 'Cost Approval <costapproval.tkei.psm.costapproval.com>',  // Verify domain in Resend
+      to: [to],
+      subject: `Cost Approval Form #${formNo} - ${signerRole}`,
+      html: `
+        <h2>Cost Approval Form #${formNo}</h2>
+        <p>Hi ${signerName},</p>
+        <p>Please review: <a href="${formLink}">${formLink}</a></p>
+        <p>Role: ${signerRole}</p>
+      `
     });
     
-    console.log('✅ Email sent:', to);
+    console.log(`✅ Email sent: ${to}`);
     res.json({ success: true });
   } catch (error) {
-    console.error('❌ Email:', error);
+    console.error('❌ Email:', error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
