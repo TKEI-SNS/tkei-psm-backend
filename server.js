@@ -8,15 +8,7 @@ const SharePointSyncService = require('./sharepoint-sync-service');
 const CalculationService = require('./calculation-service');
 require('dotenv').config();
 
-const resend = require('resend').Resend(process.env.RESEND_API_KEY);
-
 const app = express();
-app.use(express.json());
-app.use(cors({
-  origin: ['https://tkei-psm-portals.pages.dev']
-}));
-
-
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
