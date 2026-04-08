@@ -415,7 +415,7 @@ app.post('/api/send-email', async (req, res) => {
     const { to, formNo, formLink, signerName, signerRole } = req.body;
     
     await resend.emails.send({
-      from: 'Cost Approval <costapproval.tkei.psm.costapproval.com>',  // Verify domain in Resend
+      from: 'Cost Approval <noreply@tkei.psm.costapproval.com>',  // Verify domain in Resend
       to: [to],
       subject: `Cost Approval Form #${formNo} - ${signerRole}`,
       html: `
