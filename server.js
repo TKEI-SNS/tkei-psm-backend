@@ -30,7 +30,7 @@ const calcService = new CalculationService(
 );
 
 // NOTE: createTransport (not createTransporter)
-const transporter = nodemailer.createTransporter({
+const transporter = nodemailer.createTransport({
   host: 'smtp-relay.brevo.com',
   port: 2525,
   secure: false,
