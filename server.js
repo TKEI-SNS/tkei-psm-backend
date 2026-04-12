@@ -1,14 +1,14 @@
 const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
-const { Resend } = require('resend');
+//const { Resend } = require('resend');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Initialize
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-const resend = new Resend(process.env.RESEND_API_KEY);
+//const resend = new Resend(process.env.RESEND_API_KEY);
 
 app.use(cors());
 app.use(express.json());
@@ -97,32 +97,32 @@ app.get('/api/forms/:formNumber', async (req, res) => {
 });
 
 // Send email
-app.post('/api/send-email', async (req, res) => {
-  try {
-    const { to, formNo, signerName, signerRole } = req.body;
-    const link = `https://tkei-psm-portals.pages.dev/signatory-portal.html?form=${formNo}`;
+//app.post('/api/send-email', async (req, res) => {
+  //try {
+    //const { to, formNo, signerName, signerRole } = req.body;
+    //const link = `https://tkei-psm-portals.pages.dev/signatory-portal.html?form=${formNo}`;
     
-    const { data, error } = await resend.emails.send({
-      from: 'TK Elevator <onboarding@resend.dev>',
-      to: to,
-      subject: `Form ${formNo} - Sign Required`,
-      html: `<div style="font-family:Arial;padding:20px;">
-<h2>Hello ${signerName},</h2>
-<p>You are designated as <strong>${signerRole}</strong> for Form <strong>${formNo}</strong>.</p>
-<center><a href="${link}" style="display:inline-block;background:#e94560;color:white;padding:12px 30px;text-decoration:none;border-radius:5px;margin:20px 0;">SIGN DOCUMENT</a></center>
-<p>Link: <a href="${link}">${link}</a></p>
-</div>`
-    });
+    //const { data, error } = await resend.emails.send({
+      //from: 'TK Elevator <onboarding@resend.dev>',
+      //to: to,
+      //subject: `Form ${formNo} - Sign Required`,
+      //html: `<div style="font-family:Arial;padding:20px;">
+//<h2>Hello ${signerName},</h2>
+//<p>You are designated as <strong>${signerRole}</strong> for Form <strong>${formNo}</strong>.</p>
+//<center><a href="${link}" style="display:inline-block;background:#e94560;color:white;padding:12px 30px;text-decoration:none;border-radius:5px;margin:20px 0;">SIGN DOCUMENT</a></center>
+//<p>Link: <a href="${link}">${link}</a></p>
+//</div>`
+//    });
     
-    if (error) throw error;
-    console.log('✅ Email sent:', to);
-    res.json({ success: true });
-  } catch (error) {
-    console.error('❌ Email error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
+  //  if (error) throw error;
+    //console.log('✅ Email sent:', to);
+    //res.json({ success: true });
+  //} catch (error) {
+    //console.error('❌ Email error:', error);
+    //res.status(500).json({ success: false, error: error.message });
+  //}
+//});
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+//app.listen(PORT, '0.0.0.0', () => {
+ // console.log(`🚀 Server running on port ${PORT}`);
+//});
