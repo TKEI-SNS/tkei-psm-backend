@@ -1,65 +1,29 @@
 const express = require('express');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
+const { Resend } = require('resend');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Initialize
-const { createClient } = require('@supabase/supabase-js');
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-const { Resend } = require('resend');
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 app.use(cors());
 app.use(express.json());
 
-// Email endpoint
-app.post('/api/send-email', async (req, res) => {
-  try {
-    const { to, formNo, signerName, signerRole } = req.body;
-    const formLink = `https://tkei-psm-portals.pages.dev/signatory-portal.html?form=${formNo}`;
-    
-    const { data, error } = await resend.emails.send({
-      from: 'TK Elevator <onboarding@resend.dev>',
-      to: to,
-      subject: `Action Required: Form ${formNo} - Sign Document`,
-      html: `<div style="font-family:Arial;max-width:600px;margin:0 auto;padding:20px;">
-<div style="background:#1a1a2e;color:white;padding:20px;text-align:center;"><h1>TK Elevator Cost Approval</h1></div>
-<div style="padding:30px;background:#f9f9f9;margin:20px 0;">
-<h2>Hello ${signerName},</h2>
-<p>You are designated as <strong>${signerRole}</strong> for Form <strong>${formNo}</strong>.</p>
-<div style="background:#fff;border-left:4px solid #e94560;padding:15px;margin:15px 0;"><strong>Action Required:</strong> Review and sign the document.</div>
-<center><a href="${formLink}" style="display:inline-block;background:#e94560;color:white;padding:12px 30px;text-decoration:none;border-radius:5px;margin:20px 0;font-weight:bold;">REVIEW & SIGN</a></center>
-<p>Link: <a href="${formLink}">${formLink}</a></p>
-</div>
-<div style="text-align:center;color:#666;font-size:12px;">
-<p>Automated email - Do not reply</p>
-<p>&copy; 2026 TK Elevator India</p>
-</div></div>`
-    });
-    
-    if (error) throw error;
-    console.log('✅ Email sent:', to);
-    res.json({ success: true });
-  } catch (error) {
-    console.error('❌ Email:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Create form endpoint
+// Create form with calculations
 app.post('/api/forms/create', async (req, res) => {
   try {
     const { items } = req.body;
     console.log(`📝 Creating form with ${items.length} items`);
     
-    const { data: formNumData, error: formNumError } = await supabase.rpc('get_next_form_number');
-    if (formNumError) throw formNumError;
+    const { data: formNum, error: fnErr } = await supabase.rpc('get_next_form_number');
+    if (fnErr) throw fnErr;
     
-    const formNumber = formNumData;
-    const formSequence = parseInt(formNumber.split('_')[3]);
-    console.log(`✅ Form number: ${formNumber}`);
+    const formSeq = parseInt(formNum.split('_')[3]);
+    console.log(`✅ Form number: ${formNum}`);
     
     const formRows = [];
     
@@ -83,9 +47,9 @@ app.post('/api/forms/create', async (req, res) => {
       const calc = calcData[0];
       
       formRows.push({
-        id: `${formNumber}_${item.itemCode}_${item.vendorCode}`,
-        form_number: formNumber,
-        form_sequence: formSequence,
+        id: `${formNum}_${item.itemCode}_${item.vendorCode}`,
+        form_number: formNum,
+        form_sequence: formSeq,
         item_code: String(item.itemCode),
         item_description: String(item.itemDescription || ''),
         vendor_code: String(item.vendorCode),
@@ -109,26 +73,52 @@ app.post('/api/forms/create', async (req, res) => {
     if (insertError) throw insertError;
     console.log(`✅ Inserted ${insertData.length} rows`);
     
-    res.json({ success: true, formNumber: formNumber, items: insertData });
+    res.json({ success: true, formNumber: formNum, items: insertData });
   } catch (error) {
-    console.error('❌ Form creation error:', error);
+    console.error('❌ Error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// Get form endpoint
+// Get form
 app.get('/api/forms/:formNumber', async (req, res) => {
   try {
-    const { formNumber } = req.params;
     const { data, error } = await supabase
       .from('cost_approval_forms')
       .select('*')
-      .eq('form_number', formNumber)
+      .eq('form_number', req.params.formNumber)
       .order('item_code');
     
     if (error) throw error;
-    res.json({ success: true, formNumber: formNumber, items: data || [] });
+    res.json({ success: true, formNumber: req.params.formNumber, items: data || [] });
   } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Send email
+app.post('/api/send-email', async (req, res) => {
+  try {
+    const { to, formNo, signerName, signerRole } = req.body;
+    const link = `https://tkei-psm-portals.pages.dev/signatory-portal.html?form=${formNo}`;
+    
+    const { data, error } = await resend.emails.send({
+      from: 'TK Elevator <onboarding@resend.dev>',
+      to: to,
+      subject: `Form ${formNo} - Sign Required`,
+      html: `<div style="font-family:Arial;padding:20px;">
+<h2>Hello ${signerName},</h2>
+<p>You are designated as <strong>${signerRole}</strong> for Form <strong>${formNo}</strong>.</p>
+<center><a href="${link}" style="display:inline-block;background:#e94560;color:white;padding:12px 30px;text-decoration:none;border-radius:5px;margin:20px 0;">SIGN DOCUMENT</a></center>
+<p>Link: <a href="${link}">${link}</a></p>
+</div>`
+    });
+    
+    if (error) throw error;
+    console.log('✅ Email sent:', to);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('❌ Email error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
