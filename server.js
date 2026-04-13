@@ -123,6 +123,20 @@ app.get('/api/forms/:formNumber', async (req, res) => {
   //}
 //});
 
+// DOWNLOADING THE PDF FILES
+app.post('/api/forms/:formNumber/downloaded', async (req, res) => {
+  try {
+    const { formNumber } = req.params;
+    await supabase
+      .from('cost_approval_forms')
+      .update({ downloaded_at: new Date().toISOString() })
+      .eq('form_number', formNumber);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
