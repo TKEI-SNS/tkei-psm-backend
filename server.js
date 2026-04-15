@@ -11,15 +11,7 @@ const supabase = createClient(
   process.env.SUPABASE_KEY
 );
 
-app.use(cors()({
-  origin: [
-    'https://tkei-psm-portals.pages.dev',
-    'https://tke-signatory-portals.pages.dev',
-    'http://localhost:3000',
-    'http://localhost:5500'
-  ],
-  credentials: true
-}));
+app.use(cors());
 app.use(express.json({ limit: '50mb' }));  // Large limit for PDF base64
 
 // ============================================================
