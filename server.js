@@ -11,7 +11,7 @@ const supabase = createClient(
   process.env.SUPABASE_KEY
 );
 
-app.use(cors({
+app.use(cors()({
   origin: [
     'https://tkei-psm-portals.pages.dev',
     'https://tke-signatory-portals.pages.dev',
