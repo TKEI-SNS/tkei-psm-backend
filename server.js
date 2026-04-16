@@ -11,7 +11,7 @@ const supabase = createClient(
   process.env.SUPABASE_KEY
 );
 
-app.use(cors());
+app.use(cors()); // Open CORS — internal tool
 app.use(express.json({ limit: '50mb' }));  // Large limit for PDF base64
 
 // ============================================================
