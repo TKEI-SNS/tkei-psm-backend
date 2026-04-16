@@ -11,7 +11,15 @@ const supabase = createClient(
   process.env.SUPABASE_KEY
 );
 
-app.use(cors());
+app.use(cors({
+  origin: [
+    'https://tkei-psm-portals.pages.dev',
+    'https://tke-signatory-portals.pages.dev',
+    'http://localhost:3000',
+    'http://localhost:5500'
+  ],
+  credentials: true
+}));
 app.use(express.json({ limit: '50mb' }));  // Large limit for PDF base64
 
 // ============================================================
@@ -35,9 +43,14 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ success: false, error: 'All fields required.' });
     }
 
-    const validRoles = ['Purchase Manager', 'VP Purchase', 'Finance Controller'];
+    const validRoles = ['Admin', 'Purchase Manager', 'VP Purchase', 'Finance Controller'];
     if (!validRoles.includes(role)) {
       return res.status(400).json({ success: false, error: 'Invalid role.' });
+    }
+
+    // Admin must use @tkelevator.com email
+    if (role === 'Admin' && !email.toLowerCase().endsWith('@tkelevator.com')) {
+      return res.status(400).json({ success: false, error: 'Admin accounts require a @tkelevator.com email.' });
     }
 
     if (password.length < 6) {
@@ -407,6 +420,51 @@ app.post('/api/portal-forms/:formId/sign', async (req, res) => {
   }
 });
 
+
+
+// ============================================================
+// RAISE CONCERN
+// POST /api/portal-forms/:formId/concern
+// Body: { raisedBy, raisedByName, role, concern }
+// ============================================================
+app.post('/api/portal-forms/:formId/concern', async (req, res) => {
+  try {
+    const { formId } = req.params;
+    const { raisedBy, raisedByName, role, concern } = req.body;
+
+    if (!concern || concern.length < 6) {
+      return res.status(400).json({ success: false, error: 'Concern must be at least 6 characters.' });
+    }
+
+    // Get current concerns array
+    const { data: form } = await supabase
+      .from('portal_forms')
+      .select('concerns')
+      .eq('id', formId)
+      .single();
+
+    const existing = form?.concerns || [];
+    const newConcern = {
+      raisedBy, raisedByName, role, concern,
+      raisedAt: new Date().toISOString(),
+      resolved: false
+    };
+    const updated = [...existing, newConcern];
+
+    const { error } = await supabase
+      .from('portal_forms')
+      .update({ concerns: updated, has_concern: true })
+      .eq('id', formId);
+
+    if (error) throw error;
+
+    console.log(`⚠ Concern raised on ${formId} by ${raisedBy}`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('❌ Concern error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // ============================================================
 // PORTAL FORMS — DELETE
