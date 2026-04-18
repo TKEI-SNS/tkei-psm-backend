@@ -415,6 +415,49 @@ app.post('/api/portal-forms/:formId/sign', async (req, res) => {
 
 
 // ============================================================
+// ATTACHMENTS — ADD
+// POST /api/portal-forms/:formId/attachments
+// Body: { name, type, size, data (base64 dataURL) }
+// ============================================================
+app.post('/api/portal-forms/:formId/attachments', async (req, res) => {
+  try {
+    const { formId } = req.params;
+    const { name, type, size, data } = req.body;
+
+    const MAX = 10 * 1024 * 1024;
+    const approxSize = Math.round((data.length * 3) / 4);
+    if (approxSize > MAX) {
+      return res.status(400).json({ success: false, error: `${name} exceeds 10MB limit.` });
+    }
+
+    // Get current attachments
+    const { data: form } = await supabase
+      .from('portal_forms')
+      .select('attachments, attachment_count')
+      .eq('id', formId)
+      .single();
+
+    const existing = form?.attachments || [];
+    const newAtt = { name, type, size, data, uploadedAt: new Date().toISOString() };
+    const updated = [...existing, newAtt];
+
+    const { error } = await supabase
+      .from('portal_forms')
+      .update({ attachments: updated, attachment_count: updated.length })
+      .eq('id', formId);
+
+    if (error) throw error;
+
+    console.log(`📎 Attachment added: ${name} to form ${formId}`);
+    res.json({ success: true, count: updated.length });
+  } catch (error) {
+    console.error('❌ Attachment error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+// ============================================================
 // RAISE CONCERN
 // POST /api/portal-forms/:formId/concern
 // Body: { raisedBy, raisedByName, role, concern }
