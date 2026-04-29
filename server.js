@@ -746,7 +746,7 @@ app.delete('/api/analytics/record/:id', async (req, res) => {
 });
 
 //SIGN UP_SIGN IN CREDENTIALS FOR THE ADMIN PORTAL//
-  const bcrypt = require('bcryptjs');
+
  
 // ─── SIGNUP ───────────────────────────────────────────────
 app.post('/api/auth/signup', async (req, res) => {
