@@ -745,6 +745,99 @@ app.delete('/api/analytics/record/:id', async (req, res) => {
   }
 });
 
+//SIGN UP_SIGN IN CREDENTIALS FOR THE ADMIN PORTAL//
+  const bcrypt = require('bcryptjs');
+ 
+// ─── SIGNUP ───────────────────────────────────────────────
+app.post('/api/auth/signup', async (req, res) => {
+  try {
+    const { email, password, name } = req.body;
+ 
+    // Validate input
+    if (!email || !password) {
+      return res.json({ success: false, error: 'Email and password are required' });
+    }
+    if (password.length < 6) {
+      return res.json({ success: false, error: 'Password must be at least 6 characters' });
+    }
+ 
+    // Check if email already exists
+    const { data: existing } = await supabase
+      .from('admin_users')
+      .select('id')
+      .eq('email', email.toLowerCase().trim())
+      .single();
+ 
+    if (existing) {
+      return res.json({ success: false, error: 'An account with this email already exists' });
+    }
+ 
+    // Hash password (10 salt rounds)
+    const password_hash = await bcrypt.hash(password, 10);
+ 
+    // Insert new user
+    const { data, error } = await supabase
+      .from('admin_users')
+      .insert({
+        email: email.toLowerCase().trim(),
+        password_hash,
+        name: (name || '').trim() || null,
+      })
+      .select('id, email, name')
+      .single();
+ 
+    if (error) {
+      console.error('Signup DB error:', error);
+      return res.json({ success: false, error: 'Could not create account' });
+    }
+ 
+    res.json({ success: true, name: data.name, email: data.email });
+  } catch (e) {
+    console.error('Signup error:', e);
+    res.json({ success: false, error: 'Server error during signup' });
+  }
+});
+ 
+// ─── LOGIN ────────────────────────────────────────────────
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+ 
+    if (!email || !password) {
+      return res.json({ success: false, error: 'Email and password are required' });
+    }
+ 
+    // Fetch user by email
+    const { data: user, error } = await supabase
+      .from('admin_users')
+      .select('id, email, name, password_hash')
+      .eq('email', email.toLowerCase().trim())
+      .single();
+ 
+    if (error || !user) {
+      return res.json({ success: false, error: 'Invalid email or password' });
+    }
+ 
+    // Compare password
+    const valid = await bcrypt.compare(password, user.password_hash);
+    if (!valid) {
+      return res.json({ success: false, error: 'Invalid email or password' });
+    }
+ 
+    // Update last_login timestamp
+    await supabase
+      .from('admin_users')
+      .update({ last_login: new Date().toISOString() })
+      .eq('id', user.id);
+ 
+    res.json({ success: true, name: user.name, email: user.email });
+  } catch (e) {
+    console.error('Login error:', e);
+    res.json({ success: false, error: 'Server error during login' });
+  }
+});
+
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🌐 https://tkei-psm-backend.onrender.com`);
