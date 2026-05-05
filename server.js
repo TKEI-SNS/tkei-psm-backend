@@ -18,7 +18,7 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const { createClient } = require('@supabase/supabase-js');
-
+const { createTkeCostApprovalRouter } = require('./tke-cost-approval');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -836,7 +836,7 @@ app.post('/api/auth/login', async (req, res) => {
     res.json({ success: false, error: 'Server error during login' });
   }
 });
-
+app.use('/api/tke', createTkeCostApprovalRouter({ supabase }));
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
