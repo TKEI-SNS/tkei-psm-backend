@@ -377,11 +377,21 @@ function createTkeCostApprovalRouter({ supabase, requireAuth }) {
       if (numErr) throw numErr;
       const { out_form_no: form_no, out_form_date: form_date, out_form_seq: form_seq } = numData[0];
 
+      // Auto-fill from Excel data
+      const uniqueVendors = [...new Set(rows.map(r => r.vendor_name).filter(Boolean))];
+      const supplierAuto = uniqueVendors.length === 1
+        ? `${rows[0].vendor_code} — ${rows[0].vendor_name}`
+        : (uniqueVendors.length > 1 ? "Multiple" : null);
+
       const { data: formRow, error: formErr } = await supabase.from("tke_forms").insert({
         form_no, form_date, form_seq,
         prepared_by_user_id: req.user.id,
         prepared_by: req.user.full_name,
-        category: "Electrical", part_new: true,
+        category: "Electrical",
+        department: "PSM",                       // fixed default
+        product_line_impacted: "All",            // default if not edited
+        supplier: supplierAuto,                  // pulled from Excel vendor
+        part_new: true,
         ...totals,
       }).select().single();
       if (formErr) throw formErr;
@@ -443,33 +453,64 @@ function createTkeCostApprovalRouter({ supabase, requireAuth }) {
     }
   });
 
-  router.get("/forms/:id/pdf", auth, async (req, res) => {
-    let browser;
-    try {
-      const { data: form, error: fe } = await supabase.from("tke_forms").select("*").eq("id", req.params.id).single();
-      if (fe || !form) return res.status(404).json({ error: "Form not found" });
-      const { data: items } = await supabase.from("tke_form_items").select("*").eq("form_id", req.params.id).order("row_index");
-      const html = renderFormHtml(form, items || []);
+  // Generate PDF buffer (shared by both /pdf and /pdf-preview endpoints)
+  async function generatePdfForForm(formId) {
+    const { data: form, error: fe } = await supabase.from("tke_forms").select("*").eq("id", formId).single();
+    if (fe || !form) throw new Error("Form not found");
+    const { data: items } = await supabase.from("tke_form_items").select("*").eq("form_id", formId).order("row_index");
+    const html = renderFormHtml(form, items || []);
 
-      browser = await puppeteer.launch({
-        headless: true,
-        args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-      });
+    // Robust Chrome resolution: try Puppeteer's bundled path first,
+    // then fall back to env var, then let Puppeteer auto-detect.
+    const launchOpts = {
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+    };
+    try {
+      const execPath = puppeteer.executablePath();
+      if (execPath) launchOpts.executablePath = execPath;
+    } catch (_) { /* fall through to env or default */ }
+    if (!launchOpts.executablePath && process.env.PUPPETEER_EXECUTABLE_PATH) {
+      launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+    }
+
+    const browser = await puppeteer.launch(launchOpts);
+    try {
       const page = await browser.newPage();
       await page.setContent(html, { waitUntil: "networkidle0" });
       const pdfBuffer = await page.pdf({
         format: "A4", printBackground: true,
         margin: { top: "14mm", right: "12mm", bottom: "14mm", left: "12mm" },
       });
+      return { form, pdfBuffer };
+    } finally {
+      await browser.close().catch(() => {});
+    }
+  }
 
+  // Download PDF (Content-Disposition: attachment)
+  router.get("/forms/:id/pdf", auth, async (req, res) => {
+    try {
+      const { form, pdfBuffer } = await generatePdfForForm(req.params.id);
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", `attachment; filename="TKE_Cost_Approval_${form.form_no}.pdf"`);
       res.send(pdfBuffer);
     } catch (e) {
       console.error("[tke pdf]", e);
       res.status(500).json({ error: e?.message || "PDF generation failed" });
-    } finally {
-      if (browser) await browser.close().catch(() => {});
+    }
+  });
+
+  // Preview PDF (inline — opens in browser)
+  router.get("/forms/:id/pdf-preview", auth, async (req, res) => {
+    try {
+      const { form, pdfBuffer } = await generatePdfForForm(req.params.id);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `inline; filename="TKE_Cost_Approval_${form.form_no}.pdf"`);
+      res.send(pdfBuffer);
+    } catch (e) {
+      console.error("[tke pdf-preview]", e);
+      res.status(500).json({ error: e?.message || "PDF preview failed" });
     }
   });
 
