@@ -462,10 +462,38 @@ function createTkeCostApprovalRouter({ supabase, requireAuth }) {
 
     // Robust Chrome resolution: try Puppeteer's bundled path first,
     // then fall back to env var, then let Puppeteer auto-detect.
-    const launchOpts = {
-      headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-    };
+   const launchOpts = {
+  headless: true,
+  args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+};
+
+// Let Puppeteer find Chrome via its own resolver, using the cache dir from env.
+// This survives Puppeteer/Chrome version bumps automatically.
+try {
+  const { computeExecutablePath, Browser } = require("@puppeteer/browsers");
+  const cacheDir = process.env.PUPPETEER_CACHE_DIR || "/opt/render/.cache/puppeteer";
+  const buildId = puppeteer.PUPPETEER_REVISIONS?.chrome
+    || require("puppeteer/lib/cjs/puppeteer/revisions.js")?.PUPPETEER_REVISIONS?.chrome;
+  if (buildId) {
+    launchOpts.executablePath = computeExecutablePath({
+      browser: Browser.CHROME,
+      buildId,
+      cacheDir,
+    });
+  }
+} catch (e) {
+  console.warn("[tke pdf] @puppeteer/browsers resolver failed, falling back:", e.message);
+}
+
+// Fallback 1: env var override (lets you swap Chrome paths without redeploying code)
+if (!launchOpts.executablePath && process.env.PUPPETEER_EXECUTABLE_PATH) {
+  launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+}
+
+// Fallback 2: Puppeteer's own resolver (works for non-Render setups)
+if (!launchOpts.executablePath) {
+  try { launchOpts.executablePath = puppeteer.executablePath(); } catch (_) {}
+}
     try {
       const execPath = puppeteer.executablePath();
       if (execPath) launchOpts.executablePath = execPath;
