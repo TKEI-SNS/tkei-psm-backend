@@ -455,6 +455,21 @@ function createTkeCostApprovalRouter({ supabase, requireAuth }) {
 
   // Generate PDF buffer (shared by both /pdf and /pdf-preview endpoints)
   async function generatePdfForForm(formId) {
+
+// TEMPORARY DIAGNOSTIC — remove once fixed
+const { execSync } = require("child_process");
+try {
+  console.log("[DIAG] PUPPETEER_CACHE_DIR =", process.env.PUPPETEER_CACHE_DIR);
+  console.log("[DIAG] HOME =", process.env.HOME);
+  console.log("[DIAG] cwd =", process.cwd());
+  console.log("[DIAG] /opt/render/.cache contents:");
+  console.log(execSync("ls -la /opt/render/.cache/ 2>&1 || echo 'missing'").toString());
+  console.log("[DIAG] /opt/render/.cache/puppeteer contents:");
+  console.log(execSync("ls -laR /opt/render/.cache/puppeteer/ 2>&1 || echo 'missing'").toString());
+  console.log("[DIAG] find chrome binaries:");
+  console.log(execSync("find / -name 'chrome' -type f 2>/dev/null | head -20").toString());
+} catch (e) { console.log("[DIAG] failed:", e.message); }
+
     const { data: form, error: fe } = await supabase.from("tke_forms").select("*").eq("id", formId).single();
     if (fe || !form) throw new Error("Form not found");
     const { data: items } = await supabase.from("tke_form_items").select("*").eq("form_id", formId).order("row_index");
