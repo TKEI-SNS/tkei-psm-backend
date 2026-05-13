@@ -18,7 +18,7 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const { createClient } = require('@supabase/supabase-js');
-const { createTkeCostApprovalRouter } = require('./tke-cost-approval');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -331,6 +331,7 @@ app.get('/api/portal-forms', async (req, res) => {
                sig_admin, sig_pm, sig_vp, sig_fc,
                sig_admin_at, sig_pm_at, sig_vp_at, sig_fc_at,
                sig_admin_by, sig_pm_by, sig_vp_by, sig_fc_by,
+               sig_admin_remark, sig_pm_remark, sig_vp_remark, sig_fc_remark,
                attachment_count, has_concern, concerns, downloaded_at`)
       .order('uploaded_at', { ascending: false });
     if (error) throw error;
@@ -412,7 +413,7 @@ app.get('/api/portal-forms/:formId/pdf', async (req, res) => {
 app.post('/api/portal-forms/:formId/sign', async (req, res) => {
   try {
     const { formId } = req.params;
-    const { role, signatureData, signedBy } = req.body;
+    const { role, signatureData, signedBy, remark } = req.body;
 
     const validRoles = ['admin', 'pm', 'vp', 'fc'];
     if (!validRoles.includes(role)) return res.status(400).json({ success: false, error: 'Invalid role key.' });
@@ -434,7 +435,8 @@ app.post('/api/portal-forms/:formId/sign', async (req, res) => {
     const updateFields = {
       [`sig_${role}`]: signatureData,
       [`sig_${role}_at`]: now,
-      [`sig_${role}_by`]: signedBy
+      [`sig_${role}_by`]: signedBy,
+      [`sig_${role}_remark`]: (remark||'').substring(0,30)
     };
 
     const newSigs = {
@@ -744,99 +746,6 @@ app.delete('/api/analytics/record/:id', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
-
-//SIGN UP_SIGN IN CREDENTIALS FOR THE ADMIN PORTAL//
-
- 
-// ─── SIGNUP ───────────────────────────────────────────────
-app.post('/api/auth/signup', async (req, res) => {
-  try {
-    const { email, password, name } = req.body;
- 
-    // Validate input
-    if (!email || !password) {
-      return res.json({ success: false, error: 'Email and password are required' });
-    }
-    if (password.length < 6) {
-      return res.json({ success: false, error: 'Password must be at least 6 characters' });
-    }
- 
-    // Check if email already exists
-    const { data: existing } = await supabase
-      .from('admin_users')
-      .select('id')
-      .eq('email', email.toLowerCase().trim())
-      .single();
- 
-    if (existing) {
-      return res.json({ success: false, error: 'An account with this email already exists' });
-    }
- 
-    // Hash password (10 salt rounds)
-    const password_hash = await bcrypt.hash(password, 10);
- 
-    // Insert new user
-    const { data, error } = await supabase
-      .from('admin_users')
-      .insert({
-        email: email.toLowerCase().trim(),
-        password_hash,
-        name: (name || '').trim() || null,
-      })
-      .select('id, email, name')
-      .single();
- 
-    if (error) {
-      console.error('Signup DB error:', error);
-      return res.json({ success: false, error: 'Could not create account' });
-    }
- 
-    res.json({ success: true, name: data.name, email: data.email });
-  } catch (e) {
-    console.error('Signup error:', e);
-    res.json({ success: false, error: 'Server error during signup' });
-  }
-});
- 
-// ─── LOGIN ────────────────────────────────────────────────
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
- 
-    if (!email || !password) {
-      return res.json({ success: false, error: 'Email and password are required' });
-    }
- 
-    // Fetch user by email
-    const { data: user, error } = await supabase
-      .from('admin_users')
-      .select('id, email, name, password_hash')
-      .eq('email', email.toLowerCase().trim())
-      .single();
- 
-    if (error || !user) {
-      return res.json({ success: false, error: 'Invalid email or password' });
-    }
- 
-    // Compare password
-    const valid = await bcrypt.compare(password, user.password_hash);
-    if (!valid) {
-      return res.json({ success: false, error: 'Invalid email or password' });
-    }
- 
-    // Update last_login timestamp
-    await supabase
-      .from('admin_users')
-      .update({ last_login: new Date().toISOString() })
-      .eq('id', user.id);
- 
-    res.json({ success: true, name: user.name, email: user.email });
-  } catch (e) {
-    console.error('Login error:', e);
-    res.json({ success: false, error: 'Server error during login' });
-  }
-});
-app.use('/api/tke', createTkeCostApprovalRouter({ supabase }));
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
