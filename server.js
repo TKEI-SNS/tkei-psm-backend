@@ -614,22 +614,52 @@ app.post('/api/forms/create', async (req, res) => {
     const formRows = [];
     for (const item of items) {
       const cleanPrice = parseFloat(String(item.newPrice || 0).replace(/,/g, ''));
-      const { data: calcData, error: calcError } = await supabase.rpc('calculate_form_row', {
-        p_item_code: String(item.itemCode),
-        p_item_description: String(item.itemDescription || ''),
-        p_vendor_code: String(item.vendorCode),
-        p_vendor_name: String(item.vendorName || ''),
-        p_new_price: cleanPrice,
-        p_currency: String(item.currency || 'INR')
-      });
-      if (calcError) { console.error('Calculation error:', calcError); continue; }
-      const calc = calcData[0];
+      const orderType = String(item.orderType || item.order_type || '').trim();
+
+      // Try RPC with order_type first (new 3-key lookup)
+      let calc = null;
+      let calcError = null;
+      try {
+        const { data: calcData, error: err } = await supabase.rpc('calculate_form_row_v2', {
+          p_item_code: String(item.itemCode),
+          p_item_description: String(item.itemDescription || ''),
+          p_vendor_code: String(item.vendorCode),
+          p_vendor_name: String(item.vendorName || ''),
+          p_new_price: cleanPrice,
+          p_currency: String(item.currency || 'INR'),
+          p_order_type: orderType
+        });
+        if (!err && calcData && calcData.length > 0) {
+          calc = calcData[0];
+        } else {
+          calcError = err;
+        }
+      } catch (rpcErr) {
+        // v2 function doesn't exist yet — fall back to original
+        calcError = rpcErr;
+      }
+
+      // Fallback to original RPC (without order_type)
+      if (!calc) {
+        const { data: calcData, error: fallbackErr } = await supabase.rpc('calculate_form_row', {
+          p_item_code: String(item.itemCode),
+          p_item_description: String(item.itemDescription || ''),
+          p_vendor_code: String(item.vendorCode),
+          p_vendor_name: String(item.vendorName || ''),
+          p_new_price: cleanPrice,
+          p_currency: String(item.currency || 'INR')
+        });
+        if (fallbackErr) { console.error('Calculation error:', fallbackErr); continue; }
+        calc = calcData[0];
+      }
+
       formRows.push({
         id: `${formNum}_${item.itemCode}_${item.vendorCode}`,
         form_number: formNum, form_sequence: formSeq,
         item_code: String(item.itemCode), item_description: String(item.itemDescription || ''),
         vendor_code: String(item.vendorCode), vendor_name: String(item.vendorName || ''),
         new_price: cleanPrice, currency: String(item.currency || 'INR'),
+        order_type: orderType,
         old_price: parseFloat(calc.old_price || 0), price_diff: parseFloat(calc.price_diff || 0),
         percent_diff: parseFloat(calc.percent_diff || 0), porv_qty: parseFloat(calc.porv_qty || 0),
         impact: parseFloat(calc.impact || 0), remarks: String(calc.remarks || 'Calculated')
