@@ -610,7 +610,7 @@ app.post('/api/forms/create', async (req, res) => {
     console.log(`📝 Creating form with ${items.length} items`);
     const { data: formNum, error: fnErr } = await supabase.rpc('get_next_form_number');
     if (fnErr) throw fnErr;
-    const formSeq = parseInt(formNum.split('_')[3]);
+    const formSeq = parseInt(formNum.split('/')[3]);
     const formRows = [];
     for (const item of items) {
       const cleanPrice = parseFloat(String(item.newPrice || 0).replace(/,/g, ''));
