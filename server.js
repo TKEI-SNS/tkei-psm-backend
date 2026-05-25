@@ -13,7 +13,11 @@
 const express    = require('express');
 const cors       = require('cors');
 const bcrypt     = require('bcryptjs');
-const rateLimit  = require('express-rate-limit');
+// express-rate-limit — graceful fallback if not installed
+let rateLimit;
+try { rateLimit = require('express-rate-limit'); }
+catch(e) { console.warn('⚠ express-rate-limit not installed — rate limiting disabled');
+  rateLimit = (opts) => (req,res,next) => next(); }
 const { createClient } = require('@supabase/supabase-js');
 
 const app  = express();
