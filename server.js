@@ -496,6 +496,7 @@ app.post('/api/tke/upload', tkeAuth, tkeUpload.single('file'), async (req, res) 
     // Create form
     const { data: form, error: fe } = await supabase.from('tke_forms').insert({
       form_no: formNo,
+      form_seq: seq,
       form_date: now.toISOString().slice(0, 10),
       category: 'Electrical',
       department: 'PSM',
@@ -517,7 +518,7 @@ app.post('/api/tke/upload', tkeAuth, tkeUpload.single('file'), async (req, res) 
         item_code: String(r[colMap.item_code] || '').trim(),
         item_description: String(r[colMap.item_description] || '').trim().substring(0, 200),
         old_price: oldP, new_price: newP, price_diff: diff,
-        quantity: qty, impact: diff * qty, sort_order: i
+        quantity: qty, impact: diff * qty
       };
     }).filter(it => it.item_code);
 
@@ -551,7 +552,7 @@ app.get('/api/tke/forms/:id', tkeAuth, async (req, res) => {
   try {
     const { data: form, error: fe } = await supabase.from('tke_forms').select('*').eq('id', req.params.id).single();
     if (fe) throw fe;
-    const { data: items, error: ie } = await supabase.from('tke_form_items').select('*').eq('form_id', req.params.id).order('sort_order');
+    const { data: items, error: ie } = await supabase.from('tke_form_items').select('*').eq('form_id', req.params.id);
     if (ie) throw ie;
     res.json({ success: true, form, items: items || [] });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -578,7 +579,7 @@ app.patch('/api/tke/forms/:id', tkeAuth, async (req, res) => {
 async function generateTkePdf(formId) {
   const { data: form } = await supabase.from('tke_forms').select('*').eq('id', formId).single();
   if (!form) throw new Error('Form not found');
-  const { data: items } = await supabase.from('tke_form_items').select('*').eq('form_id', formId).order('sort_order');
+  const { data: items } = await supabase.from('tke_form_items').select('*').eq('form_id', formId);
 
   const totalImpact = (items||[]).reduce((s,i)=>s+Number(i.impact||0),0);
   const totalDelta = (items||[]).reduce((s,i)=>s+Number(i.price_diff||0),0);
