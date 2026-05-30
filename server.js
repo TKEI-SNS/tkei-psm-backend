@@ -515,8 +515,9 @@ app.post('/api/tke/upload', tkeAuth, tkeUpload.single('file'), async (req, res) 
       const diff = newP - oldP;
       return {
         form_id: form.id,
-        item_code: String(r[colMap.item_code] || '').trim(),
-        item_description: String(r[colMap.item_description] || '').trim().substring(0, 200),
+        row_index: i + 1,
+        item_code: String(r[colMap.item_code] || '').trim() || 'UNKNOWN',
+        item_description: String(r[colMap.item_description] || '').trim().substring(0, 200) || '',
         old_price: oldP, new_price: newP, price_diff: diff,
         quantity: qty, impact: diff * qty
       };
