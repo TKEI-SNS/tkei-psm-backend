@@ -191,6 +191,9 @@ function renderFormHtml(meta, items) {
   table.data td.delta, table.data td.impact { color: #c00; font-weight: 600; }
   table.data tr.total td { background: #f5f5f5; font-weight: 700; color: #c00; }
   table.data tr.total td.label { color: #000; text-align: right; }
+  table.data tr { page-break-inside: avoid; break-inside: avoid; }
+  table.data thead { display: table-header-group; }
+  table.data tfoot { display: table-footer-group; }
   .signatures { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 14pt; margin-top: 36pt; }
   .sig { text-align: center; font-size: 10pt; }
   .sig .line { border-top: 0.5pt solid #333; padding-top: 3pt; margin-top: 24pt; }
@@ -460,49 +463,19 @@ function createTkeCostApprovalRouter({ supabase, requireAuth }) {
     const { data: items } = await supabase.from("tke_form_items").select("*").eq("form_id", formId).order("row_index");
     const html = renderFormHtml(form, items || []);
 
-    // Find Chrome dynamically — search project-relative cache (persists at runtime)
-    // and a few standard locations. Survives Puppeteer/Chrome version bumps.
+    // Robust Chrome resolution: try Puppeteer's bundled path first,
+    // then fall back to env var, then let Puppeteer auto-detect.
     const launchOpts = {
       headless: true,
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
     };
-
-    const findChrome = () => {
-      // Priority 1: explicit env override
-      if (process.env.PUPPETEER_EXECUTABLE_PATH && fs.existsSync(process.env.PUPPETEER_EXECUTABLE_PATH)) {
-        return process.env.PUPPETEER_EXECUTABLE_PATH;
-      }
-      // Priority 2: search common cache roots for any installed Chrome version
-      const roots = [
-        path.join(process.cwd(), ".cache", "puppeteer"),
-        path.join(__dirname, ".cache", "puppeteer"),
-        process.env.PUPPETEER_CACHE_DIR,
-        "/opt/render/project/src/.cache/puppeteer",
-        path.join(process.env.HOME || "", ".cache", "puppeteer"),
-      ].filter(Boolean);
-      for (const root of roots) {
-        const chromeDir = path.join(root, "chrome");
-        if (!fs.existsSync(chromeDir)) continue;
-        const versions = fs.readdirSync(chromeDir).filter(d => d.startsWith("linux-"));
-        for (const v of versions) {
-          const candidate = path.join(chromeDir, v, "chrome-linux64", "chrome");
-          if (fs.existsSync(candidate)) return candidate;
-        }
-      }
-      // Priority 3: Puppeteer's own resolver
-      try {
-        const p = puppeteer.executablePath();
-        if (p && fs.existsSync(p)) return p;
-      } catch (_) {}
-      return null;
-    };
-
-    const chromePath = findChrome();
-    if (!chromePath) {
-      throw new Error("Chrome not found. Build must run: npx puppeteer browsers install chrome --path ./.cache/puppeteer");
+    try {
+      const execPath = puppeteer.executablePath();
+      if (execPath) launchOpts.executablePath = execPath;
+    } catch (_) { /* fall through to env or default */ }
+    if (!launchOpts.executablePath && process.env.PUPPETEER_EXECUTABLE_PATH) {
+      launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
     }
-    launchOpts.executablePath = chromePath;
-    console.log("[tke pdf] using Chrome at:", chromePath);
 
     const browser = await puppeteer.launch(launchOpts);
     try {
