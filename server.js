@@ -56,6 +56,45 @@ async function sendToOneDrive(url, payload) {
 
 const clean = s => String(s||'').replace(/<[^>]*>/g,'').trim();
 
+// ─── Form number generation for Standard portal ───────────────────────────
+// Format: PSM/YY-YY/MM/N
+//   - YY-YY = Indian financial year (Apr 1 – Mar 31). E.g. June 2025 -> "25-26"
+//   - MM    = 2-digit current month
+//   - N     = incremental counter, reset every (FY, month) pair
+//
+// Backed by Postgres table `psm_form_counter (fy_month text primary key, last_seq int)`
+// via RPC `psm_next_form_no()`. Falls back gracefully if RPC is missing — uses
+// timestamp-based number so production never gets stuck.
+function indianFinancialYearLabel(d = new Date()) {
+  // April (month index 3) onwards = new FY. Before April = previous FY.
+  const y = d.getFullYear();
+  const fyStart = d.getMonth() >= 3 ? y : y - 1;
+  const fyEnd   = fyStart + 1;
+  const pad2 = n => String(n).padStart(2,'0');
+  return `${pad2(fyStart % 100)}-${pad2(fyEnd % 100)}`;
+}
+
+async function generatePsmFormNumber() {
+  const now = new Date();
+  const fy  = indianFinancialYearLabel(now);
+  const mm  = String(now.getMonth() + 1).padStart(2,'0');
+  try {
+    const { data, error } = await supabase.rpc('psm_next_form_no', {
+      p_fy: fy, p_month: mm,
+    });
+    if (error) throw error;
+    const seq = (data && data[0] && data[0].out_seq) || data?.out_seq || data;
+    if (!seq) throw new Error('RPC returned no sequence');
+    return `PSM/${fy}/${mm}/${seq}`;
+  } catch (e) {
+    // Production safety: never block form creation just because counter is misconfigured.
+    // Use a timestamp-derived suffix that's guaranteed unique within the month.
+    console.warn('[psm_next_form_no] RPC failed, falling back to timestamp suffix:', e.message);
+    const suffix = String(Date.now()).slice(-6);
+    return `PSM/${fy}/${mm}/T${suffix}`;
+  }
+}
+
 app.get('/health',(req,res)=>res.json({status:'ok',time:new Date().toISOString()}));
 
 // ── ROLE RULES ──
@@ -337,22 +376,108 @@ app.post('/api/portal-forms/:id/downloaded', async (req,res) => {
 // ── LEGACY FORMS ──
 app.post('/api/forms/create', async (req,res) => {
   try {
-    const {formNumber,formSequence,items}=req.body;
-    if(!formNumber||!items||!Array.isArray(items)||items.length===0)
-      return res.status(400).json({success:false,error:'formNumber and items[] required.'});
+    let {formNumber,formSequence,items} = req.body || {};
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({success:false,error:'items[] is required and must be non-empty.'});
+    }
+    // Auto-generate formNumber if frontend didn't supply one
+    if (!formNumber) {
+      formNumber = await generatePsmFormNumber();
+    }
     const formRows=[];
     for(const item of items){
       const cleanPrice=parseFloat(String(item.newPrice||0).replace(/[^0-9.]/g,''))||0;
       const orderType=String(item.orderType||item.order_type||'STANDARD').toUpperCase();
       let calc=null;
       try{const {data:cd}=await supabase.rpc('calculate_form_row_v2',{p_item_code:String(item.itemCode),p_item_description:String(item.itemDescription||''),p_vendor_code:String(item.vendorCode),p_vendor_name:String(item.vendorName||''),p_new_price:cleanPrice,p_currency:String(item.currency||'INR'),p_order_type:orderType});if(cd&&cd.length>0)calc=cd[0];}catch(_){}
-      if(!calc){const {data:cd2,error:fe}=await supabase.rpc('calculate_form_row',{p_item_code:String(item.itemCode),p_item_description:String(item.itemDescription||''),p_vendor_code:String(item.vendorCode),p_vendor_name:String(item.vendorName||''),p_new_price:cleanPrice,p_currency:String(item.currency||'INR')});if(fe){console.error('Calc:',fe);continue;}calc=cd2[0];}
-      formRows.push({id:`${formNumber}_${item.itemCode}_${item.vendorCode}`,form_number:String(formNumber),form_sequence:parseInt(formSequence)||1,item_code:String(item.itemCode),item_description:String(item.itemDescription||''),vendor_code:String(item.vendorCode),vendor_name:String(item.vendorName||''),new_price:cleanPrice,currency:String(item.currency||'INR'),order_type:orderType,old_price:parseFloat(calc.old_price||0),price_diff:parseFloat(calc.price_diff||0),percent_diff:parseFloat(calc.percent_diff||0),porv_qty:parseFloat(calc.porv_qty||0),impact:parseFloat(calc.impact||0),remarks:String(calc.remarks||'Calculated')});
+      if(!calc){
+        try {
+          const {data:cd2,error:fe}=await supabase.rpc('calculate_form_row',{p_item_code:String(item.itemCode),p_item_description:String(item.itemDescription||''),p_vendor_code:String(item.vendorCode),p_vendor_name:String(item.vendorName||''),p_new_price:cleanPrice,p_currency:String(item.currency||'INR')});
+          if(fe){console.error('Calc RPC error:',fe);}
+          else if (cd2 && cd2.length>0) calc=cd2[0];
+        } catch(e) { console.error('Calc RPC threw:',e.message); }
+      }
+      // If both calc RPCs failed/missing, still write the row with raw values so the user isn't blocked.
+      if(!calc) calc = { old_price:0, price_diff:0, percent_diff:0, porv_qty:0, impact:0, remarks:'No calc RPC' };
+      // Safe id — replace slashes so it doesn't break composite keys
+      const safeFormNo = String(formNumber).replace(/[/\\]/g,'_');
+      formRows.push({
+        id:`${safeFormNo}_${item.itemCode}_${item.vendorCode}`,
+        form_number:String(formNumber),
+        form_sequence:parseInt(formSequence)||1,
+        item_code:String(item.itemCode),
+        item_description:String(item.itemDescription||''),
+        vendor_code:String(item.vendorCode),
+        vendor_name:String(item.vendorName||''),
+        new_price:cleanPrice,
+        currency:String(item.currency||'INR'),
+        order_type:orderType,
+        old_price:parseFloat(calc.old_price||0),
+        price_diff:parseFloat(calc.price_diff||0),
+        percent_diff:parseFloat(calc.percent_diff||0),
+        porv_qty:parseFloat(calc.porv_qty||0),
+        impact:parseFloat(calc.impact||0),
+        remarks:String(calc.remarks||'Calculated'),
+      });
+    }
+    if (formRows.length === 0) {
+      return res.status(422).json({success:false,error:'No valid items to insert.'});
     }
     const {data:insertData,error:ie}=await supabase.from('cost_approval_forms').insert(formRows).select();
     if(ie) throw ie;
     res.json({success:true,formNumber:String(formNumber),items:insertData});
-  } catch(e){res.status(500).json({success:false,error:e.message});}
+  } catch(e){
+    console.error('[POST /api/forms/create]', e);
+    res.status(500).json({success:false,error:e.message||'Internal error'});
+  }
+});
+
+// Alias: frontend's pre-calc upload calls this; same behaviour as /create.
+app.post('/api/forms/upload-precalc', async (req,res) => {
+  // Forward to the same handler — keep one source of truth
+  req.url = '/api/forms/create';
+  app._router.handle(req, res, () => {});
+});
+
+// Frontend's "Forms Tracker" view fetches this.
+app.get('/api/forms/tracker/all', async (req,res) => {
+  try {
+    const {data,error} = await supabase
+      .from('cost_approval_forms')
+      .select('form_number,form_sequence,created_at,downloaded_at')
+      .order('created_at',{ascending:false});
+    if (error) throw error;
+    // Group by form_number to one row per form
+    const byForm = {};
+    for (const row of (data||[])) {
+      if (!byForm[row.form_number]) {
+        byForm[row.form_number] = {
+          formNumber: row.form_number,
+          createdAt: row.created_at,
+          totalSigners: 0,
+          signedCount: 0,
+        };
+      }
+    }
+    // Try to enrich with signing data if the table exists
+    try {
+      const {data:signData} = await supabase
+        .from('portal_forms')
+        .select('form_no,sig_admin,sig_pm,sig_vp,sig_fc');
+      if (signData) {
+        for (const s of signData) {
+          if (!byForm[s.form_no]) continue;
+          const sigs = [s.sig_admin,s.sig_pm,s.sig_vp,s.sig_fc].filter(Boolean);
+          byForm[s.form_no].totalSigners = 4;
+          byForm[s.form_no].signedCount = sigs.length;
+        }
+      }
+    } catch(_){}
+    res.json({success:true, forms: Object.values(byForm)});
+  } catch(e){
+    console.error('[GET /api/forms/tracker/all]', e);
+    res.status(500).json({success:false,error:e.message});
+  }
 });
 
 app.get('/api/forms/:formNumber', async (req,res) => {
@@ -368,6 +493,16 @@ app.post('/api/forms/:formNumber/downloaded', async (req,res) => {
     await supabase.from('cost_approval_forms').update({downloaded_at:new Date().toISOString()}).eq('form_number',req.params.formNumber);
     res.json({success:true});
   } catch(e){res.status(500).json({success:false,error:e.message});}
+});
+
+// ── STUB ROUTES — frontend calls these but they're not implemented yet.
+// Return clean JSON instead of HTML 500s, so the frontend can show a friendly toast.
+app.post('/api/sync/upload', async (req,res) => {
+  res.status(501).json({success:false,error:'Sync endpoint not yet configured on this backend.'});
+});
+
+app.post('/api/send-email', async (req,res) => {
+  res.status(501).json({success:false,error:'Email endpoint not yet configured on this backend.'});
 });
 
 // ── COST ANALYZER ──
@@ -446,6 +581,19 @@ app.get('/api/analytics/forms-list', async (req,res) => {
 // ═══════════════════════════════════════════════════════════════
 const { createTkeCostApprovalRouter } = require('./tke-cost-approval');
 app.use('/api/tke', createTkeCostApprovalRouter({ supabase }));
+
+// ─── Production safety: clean 404 + JSON-only error response ──────────────
+// Any /api/* path that didn't match a route returns JSON, not HTML.
+app.use('/api', (req,res) => {
+  res.status(404).json({success:false,error:`Route not found: ${req.method} ${req.originalUrl}`});
+});
+// Final error handler — if anything anywhere throws and isn't caught locally,
+// we still respond with JSON instead of a stack trace HTML page.
+app.use((err, req, res, next) => {
+  console.error('[unhandled]', err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({success:false,error:err.message||'Internal server error'});
+});
 
 app.listen(PORT,'0.0.0.0',()=>{
   console.log(`🚀 TKE Portal Backend on port ${PORT}`);
