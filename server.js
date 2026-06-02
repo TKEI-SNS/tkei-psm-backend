@@ -66,9 +66,9 @@ const clean = s => String(s||'').replace(/<[^>]*>/g,'').trim();
 // via RPC `psm_next_form_no()`. Falls back gracefully if RPC is missing — uses
 // timestamp-based number so production never gets stuck.
 function indianFinancialYearLabel(d = new Date()) {
-  // April (month index 3) onwards = new FY. Before April = previous FY.
+  // Company FY runs Oct 1 – Sept 30. October (month index 9) onwards = new FY.
   const y = d.getFullYear();
-  const fyStart = d.getMonth() >= 3 ? y : y - 1;
+  const fyStart = d.getMonth() >= 9 ? y : y - 1;
   const fyEnd   = fyStart + 1;
   const pad2 = n => String(n).padStart(2,'0');
   return `${pad2(fyStart % 100)}-${pad2(fyEnd % 100)}`;
@@ -92,6 +92,33 @@ async function generatePsmFormNumber() {
     console.warn('[psm_next_form_no] RPC failed, falling back to timestamp suffix:', e.message);
     const suffix = String(Date.now()).slice(-6);
     return `PSM/${fy}/${mm}/T${suffix}`;
+  }
+}
+
+// ─── Supabase Auth middleware (Bearer JWT) ─────────────────────────────────
+// Use this on any route that needs the logged-in user's identity.
+// Same pattern as tke-cost-approval.js — one Supabase Auth shared across portals.
+async function requireSupabaseAuth(req, res, next) {
+  try {
+    const token = (req.headers.authorization || '').startsWith('Bearer ')
+      ? req.headers.authorization.slice(7) : null;
+    if (!token) return res.status(401).json({success:false,error:'Missing auth token'});
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error || !data?.user) return res.status(401).json({success:false,error:'Invalid or expired token'});
+    const { data: profile } = await supabase
+      .from('profiles').select('full_name').eq('id', data.user.id).maybeSingle();
+    req.user = {
+      id: data.user.id,
+      email: data.user.email,
+      full_name: profile?.full_name
+        || data.user.user_metadata?.full_name
+        || data.user.email?.split('@')[0]
+        || 'Unknown',
+    };
+    next();
+  } catch (e) {
+    console.error('[psm auth]', e);
+    res.status(401).json({success:false,error:'Auth failed'});
   }
 }
 
@@ -425,6 +452,54 @@ app.post('/api/forms/create', async (req,res) => {
     }
     const {data:insertData,error:ie}=await supabase.from('cost_approval_forms').insert(formRows).select();
     if(ie) throw ie;
+
+    // ─── Write metadata row (best-effort; never fail the request if this fails) ───
+    // If the request had a Bearer token we attribute the form to that user; else null.
+    let createdByUserId = null;
+    let createdByName = null;
+    try {
+      const token = (req.headers.authorization || '').startsWith('Bearer ')
+        ? req.headers.authorization.slice(7) : null;
+      if (token) {
+        const { data: u } = await supabase.auth.getUser(token);
+        if (u?.user) {
+          createdByUserId = u.user.id;
+          const { data: profile } = await supabase
+            .from('profiles').select('full_name').eq('id', u.user.id).maybeSingle();
+          createdByName = profile?.full_name
+            || u.user.user_metadata?.full_name
+            || u.user.email?.split('@')[0]
+            || 'Unknown';
+        }
+      }
+    } catch (e) { console.warn('[create meta auth]', e.message); }
+
+    try {
+      // Aggregate metadata from the inserted rows
+      const totalImpact = formRows.reduce((s,r)=>s+(parseFloat(r.impact)||0),0);
+      const totalQty    = formRows.reduce((s,r)=>s+(parseFloat(r.porv_qty)||0),0);
+      const pctRows     = formRows.filter(r=>parseFloat(r.old_price)>0);
+      const avgPct      = pctRows.length
+        ? pctRows.reduce((s,r)=>s+(parseFloat(r.percent_diff)||0),0)/pctRows.length : 0;
+      const firstRow    = formRows[0] || {};
+
+      await supabase.from('psm_forms_meta').upsert({
+        form_number: String(formNumber),
+        form_sequence: parseInt(formSequence)||1,
+        created_by_user_id: createdByUserId,
+        created_by_name: createdByName,
+        vendor_name: firstRow.vendor_name || null,
+        vendor_code: firstRow.vendor_code || null,
+        category: req.body?.category || null,
+        item_count: formRows.length,
+        total_impact: totalImpact,
+        quarterly_impact: totalImpact/4,
+        avg_pct_diff: avgPct,
+        total_yearly_vol: totalQty,
+        source: req.body?.source === 'precalc' ? 'precalc' : 'standard',
+      }, { onConflict: 'form_number' });
+    } catch (e) { console.warn('[psm_forms_meta upsert]', e.message); }
+
     res.json({success:true,formNumber:String(formNumber),items:insertData});
   } catch(e){
     console.error('[POST /api/forms/create]', e);
@@ -490,9 +565,29 @@ app.get('/api/forms/:formNumber', async (req,res) => {
 
 app.post('/api/forms/:formNumber/downloaded', async (req,res) => {
   try {
-    await supabase.from('cost_approval_forms').update({downloaded_at:new Date().toISOString()}).eq('form_number',req.params.formNumber);
+    const ts = new Date().toISOString();
+    await supabase.from('cost_approval_forms').update({downloaded_at:ts}).eq('form_number',req.params.formNumber);
+    // Keep metadata in sync
+    await supabase.from('psm_forms_meta').update({downloaded_at:ts}).eq('form_number',req.params.formNumber);
     res.json({success:true});
   } catch(e){res.status(500).json({success:false,error:e.message});}
+});
+
+// ─── Forms Created — the user's own forms only, last 500, metadata only ───
+app.get('/api/forms/my-forms', requireSupabaseAuth, async (req,res) => {
+  try {
+    const { data, error } = await supabase
+      .from('psm_forms_meta')
+      .select('form_number, form_sequence, created_at, downloaded_at, vendor_name, vendor_code, category, item_count, total_impact, quarterly_impact, avg_pct_diff, total_yearly_vol, source, created_by_name')
+      .eq('created_by_user_id', req.user.id)
+      .order('created_at', { ascending: false })
+      .limit(500);
+    if (error) throw error;
+    res.json({success:true, forms: data || []});
+  } catch (e) {
+    console.error('[GET /api/forms/my-forms]', e);
+    res.status(500).json({success:false,error:e.message});
+  }
 });
 
 // ── STUB ROUTES — frontend calls these but they're not implemented yet.
