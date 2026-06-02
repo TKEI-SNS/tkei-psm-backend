@@ -483,7 +483,11 @@ app.post('/api/forms/create', async (req,res) => {
         ? pctRows.reduce((s,r)=>s+(parseFloat(r.percent_diff)||0),0)/pctRows.length : 0;
       const firstRow    = formRows[0] || {};
 
-      await supabase.from('psm_forms_meta').upsert({
+      console.log('[psm_forms_meta] writing form_number=' + String(formNumber)
+                + ' user_id=' + (createdByUserId || 'NULL (no auth token)')
+                + ' user_name=' + (createdByName || 'unknown'));
+
+      const upsertRes = await supabase.from('psm_forms_meta').upsert({
         form_number: String(formNumber),
         form_sequence: parseInt(formSequence)||1,
         created_by_user_id: createdByUserId,
@@ -498,7 +502,12 @@ app.post('/api/forms/create', async (req,res) => {
         total_yearly_vol: totalQty,
         source: req.body?.source === 'precalc' ? 'precalc' : 'standard',
       }, { onConflict: 'form_number' });
-    } catch (e) { console.warn('[psm_forms_meta upsert]', e.message); }
+      if (upsertRes.error) {
+        console.error('[psm_forms_meta upsert ERROR]', upsertRes.error.message, upsertRes.error.details||'');
+      } else {
+        console.log('[psm_forms_meta] write OK');
+      }
+    } catch (e) { console.warn('[psm_forms_meta upsert threw]', e.message); }
 
     res.json({success:true,formNumber:String(formNumber),items:insertData});
   } catch(e){
@@ -576,6 +585,7 @@ app.post('/api/forms/:formNumber/downloaded', async (req,res) => {
 // ─── Forms Created — the user's own forms only, last 500, metadata only ───
 app.get('/api/forms/my-forms', requireSupabaseAuth, async (req,res) => {
   try {
+    console.log('[my-forms] requested by user_id=' + req.user.id + ' email=' + req.user.email);
     const { data, error } = await supabase
       .from('psm_forms_meta')
       .select('form_number, form_sequence, created_at, downloaded_at, vendor_name, vendor_code, category, item_count, total_impact, quarterly_impact, avg_pct_diff, total_yearly_vol, source, created_by_name')
@@ -583,6 +593,7 @@ app.get('/api/forms/my-forms', requireSupabaseAuth, async (req,res) => {
       .order('created_at', { ascending: false })
       .limit(500);
     if (error) throw error;
+    console.log('[my-forms] returned ' + (data||[]).length + ' rows');
     res.json({success:true, forms: data || []});
   } catch (e) {
     console.error('[GET /api/forms/my-forms]', e);
