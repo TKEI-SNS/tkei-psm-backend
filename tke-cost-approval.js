@@ -191,9 +191,6 @@ function renderFormHtml(meta, items) {
   table.data td.delta, table.data td.impact { color: #c00; font-weight: 600; }
   table.data tr.total td { background: #f5f5f5; font-weight: 700; color: #c00; }
   table.data tr.total td.label { color: #000; text-align: right; }
-  table.data tr { page-break-inside: avoid; break-inside: avoid; }
-  table.data thead { display: table-header-group; }
-  table.data tfoot { display: table-footer-group; }
   .signatures { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 14pt; margin-top: 36pt; }
   .sig { text-align: center; font-size: 10pt; }
   .sig .line { border-top: 0.5pt solid #333; padding-top: 3pt; margin-top: 24pt; }
@@ -376,9 +373,31 @@ function createTkeCostApprovalRouter({ supabase, requireAuth }) {
       const rows = parseExcel(req.file.buffer);
       const totals = computeTotals(rows);
 
-      const { data: numData, error: numErr } = await supabase.rpc("tke_next_form_no");
-      if (numErr) throw numErr;
-      const { out_form_no: form_no, out_form_date: form_date, out_form_seq: form_seq } = numData[0];
+      // Shared counter with the Standard portal — produces unified PSM/YY-YY/MM/N numbers.
+      const now = new Date();
+      const fyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+      const pad2 = n => String(n).padStart(2, "0");
+      const fy = `${pad2(fyStart % 100)}-${pad2((fyStart + 1) % 100)}`;
+      const mm = pad2(now.getMonth() + 1);
+
+      let form_no, form_seq;
+      try {
+        const { data: numData, error: numErr } = await supabase.rpc("psm_next_form_no", {
+          p_fy: fy, p_month: mm,
+        });
+        if (numErr) throw numErr;
+        const seq = (numData && numData[0] && numData[0].out_seq) ?? numData?.out_seq;
+        if (!seq) throw new Error("psm_next_form_no returned no sequence");
+        form_seq = seq;
+        form_no = `PSM/${fy}/${mm}/${seq}`;
+      } catch (e) {
+        // Production safety: never block upload if counter RPC is misconfigured.
+        console.warn("[tke upload] psm_next_form_no failed, using timestamp fallback:", e.message);
+        const suffix = String(Date.now()).slice(-6);
+        form_no = `PSM/${fy}/${mm}/T${suffix}`;
+        form_seq = 0;
+      }
+      const form_date = now.toISOString().slice(0, 10);
 
       // Auto-fill from Excel data
       const uniqueVendors = [...new Set(rows.map(r => r.vendor_name).filter(Boolean))];
