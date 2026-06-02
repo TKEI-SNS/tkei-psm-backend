@@ -158,6 +158,73 @@ function renderFormHtml(meta, items) {
   const vendors = [...new Set(items.map((i) => `${i.vendor_code} — ${i.vendor_name}`).filter((v) => v && v !== " — "))];
   const vendorCell = vendors.length === 1 ? esc(vendors[0]) : (vendors.length > 1 ? "Multiple" : "—");
 
+  // ─── Machine-readable parse block ───────────────────────────────────────
+  // Rendered in white 0.5pt text — invisible to humans, extractable by the
+  // Cost Analyzer portal. Format: pipe-delimited key=value pairs, one record
+  // per line, bounded by TKE_PARSE_START / TKE_PARSE_END markers.
+  //
+  // Field values are sanitised: pipes, newlines, and angle brackets are
+  // stripped or replaced so the markers stay reliable to detect.
+  const safe = (v) => String(v == null ? "" : v).replace(/[|\r\n<>]/g, " ").replace(/\s+/g, " ").trim();
+  const n = (v) => (v == null || isNaN(Number(v))) ? "" : Number(v).toFixed(2);
+  const parseFields = [
+    `form_no=${safe(meta.form_no)}`,
+    `form_date=${safe(meta.form_date)}`,
+    `category=${safe(meta.category)}`,
+    `department=${safe(meta.department)}`,
+    `initiated_by=${safe(meta.initiated_by_name)}`,
+    `prepared_by=${safe(meta.prepared_by)}`,
+    `checked_by=${safe(meta.checked_by)}`,
+    `supplier=${safe(meta.supplier)}`,
+    `product_line=${safe(meta.product_line_impacted)}`,
+    `details=${safe(meta.details_of_change)}`,
+    `reason_rm_increase=${meta.reason_rm_increase?1:0}`,
+    `reason_rm_decrease=${meta.reason_rm_decrease?1:0}`,
+    `reason_sourcing_increase=${meta.reason_sourcing_increase?1:0}`,
+    `reason_sourcing_decrease=${meta.reason_sourcing_decrease?1:0}`,
+    `reason_eauction_increase=${meta.reason_eauction_increase?1:0}`,
+    `reason_eauction_decrease=${meta.reason_eauction_decrease?1:0}`,
+    `quality_field_complaint=${meta.quality_field_complaint?1:0}`,
+    `quality_product_improvement=${meta.quality_product_improvement?1:0}`,
+    `pdc_product_improvement=${meta.pdc_product_improvement?1:0}`,
+    `pdc_emi_change=${meta.pdc_emi_change?1:0}`,
+    `part_new=${meta.part_new?1:0}`,
+    `part_existing=${meta.part_existing?1:0}`,
+    `part_other=${meta.part_other?1:0}`,
+    `item_count=${items.length}`,
+    `total_yearly_vol=${n(totalYearlyVol)}`,
+    `total_quarterly_impact=${n(totalImpact)}`,
+    `total_yearly_impact=${n(totalImpact*4)}`,
+    `avg_pct_diff=${n(avgPct)}`,
+  ].join("|");
+
+  const parseItems = items.map((it, idx) => {
+    const oldP = Number(it.old_price) || 0;
+    const pctDiff = oldP ? (Number(it.price_diff)/oldP)*100 : 0;
+    return [
+      `idx=${idx+1}`,
+      `item_code=${safe(it.item_code)}`,
+      `description=${safe(it.item_description)}`,
+      `vendor_code=${safe(it.vendor_code)}`,
+      `vendor_name=${safe(it.vendor_name)}`,
+      `old_price=${n(it.old_price)}`,
+      `new_price=${n(it.new_price)}`,
+      `price_diff=${n(it.price_diff)}`,
+      `pct_diff=${n(pctDiff)}`,
+      `quantity=${safe(it.quantity)}`,
+      `impact=${n(it.impact)}`,
+    ].join("|");
+  });
+
+  const parseBlock = [
+    "TKE_PARSE_START",
+    "version=1",
+    parseFields,
+    `items_count=${parseItems.length}`,
+    ...parseItems.map((line, i) => `item_${i+1}::${line}`),
+    "TKE_PARSE_END",
+  ].join("\n");
+
   return `<!doctype html>
 <html><head><meta charset="utf-8"/><title>Form ${esc(meta.form_no)}</title>
 <style>
@@ -198,6 +265,10 @@ function renderFormHtml(meta, items) {
   .sig .name { font-weight: 700; margin-top: 1pt; }
   .footnote { text-align: right; font-size: 9pt; color: #555; margin-top: 8pt; font-style: italic; }
   .page-break { page-break-before: always; }
+  /* Machine-readable block for Cost Analyzer parsing.
+     White color + 0.5pt size = invisible to humans, but text remains in PDF text layer. */
+  .tke-parse { color: #ffffff; font-size: 0.5pt; line-height: 0.6pt; font-family: "Courier New", monospace; }
+  .tke-parse * { color: #ffffff !important; }
   .annexure-summary { text-align: right; margin-top: 12pt; font-size: 10pt; line-height: 1.7; }
 </style></head>
 <body>
@@ -307,6 +378,9 @@ function renderFormHtml(meta, items) {
 </div>
 
 <div class="footnote">All amounts in Indian Rupees ₹</div>
+
+<!-- Machine-readable block for Cost Analyzer portal. White text, 0.5pt — invisible to humans but in PDF text layer. -->
+<pre class="tke-parse">${parseBlock}</pre>
 </body></html>`;
 }
 
@@ -374,8 +448,9 @@ function createTkeCostApprovalRouter({ supabase, requireAuth }) {
       const totals = computeTotals(rows);
 
       // Shared counter with the Standard portal — produces unified PSM/YY-YY/MM/N numbers.
+      // Company FY: Oct 1 – Sept 30. October (month index 9) onwards = new FY.
       const now = new Date();
-      const fyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+      const fyStart = now.getMonth() >= 9 ? now.getFullYear() : now.getFullYear() - 1;
       const pad2 = n => String(n).padStart(2, "0");
       const fy = `${pad2(fyStart % 100)}-${pad2((fyStart + 1) % 100)}`;
       const mm = pad2(now.getMonth() + 1);
@@ -467,7 +542,7 @@ function createTkeCostApprovalRouter({ supabase, requireAuth }) {
       const { data, error } = await supabase.from("tke_forms")
         .select("id, form_no, form_date, status, quarterly_impact, prepared_by, created_at")
         .eq("prepared_by_user_id", req.user.id)
-        .order("created_at", { ascending: false }).limit(50);
+        .order("created_at", { ascending: false }).limit(500);
       if (error) throw error;
       res.json({ forms: data || [] });
     } catch (e) {
