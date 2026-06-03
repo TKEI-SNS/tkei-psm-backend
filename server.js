@@ -105,6 +105,13 @@ async function requireSupabaseAuth(req, res, next) {
     if (!token) return res.status(401).json({success:false,error:'Missing auth token'});
     const { data, error } = await supabase.auth.getUser(token);
     if (error || !data?.user) return res.status(401).json({success:false,error:'Invalid or expired token'});
+
+    // Domain restriction (security boundary — never trust the client check alone)
+    const email = (data.user.email || '').toLowerCase();
+    if (!email.endsWith('@tkelevator.com')) {
+      return res.status(403).json({success:false,error:'Only TK Elevator accounts are permitted on this portal.'});
+    }
+
     const { data: profile } = await supabase
       .from('profiles').select('full_name').eq('id', data.user.id).maybeSingle();
     req.user = {
