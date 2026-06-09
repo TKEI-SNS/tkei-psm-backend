@@ -141,10 +141,11 @@ app.post('/api/auth/register', loginLimiter, async (req,res) => {
     const email=clean(req.body.email).toLowerCase(), password=req.body.password||'';
     const name=clean(req.body.name), role=clean(req.body.role);
     if(!email||!password||!name||!role) return res.status(400).json({success:false,error:'All fields required.'});
-    const validRoles=['Admin','Purchase Manager','VP Purchase','Finance Controller'];
+    // Enforce TK Elevator domain for ALL registrations (not just Admin)
+    if(!email.endsWith('@tkelevator.com')) return res.status(400).json({success:false,error:'Only @tkelevator.com email addresses are allowed.'});
+    const validRoles=['Admin','Purchase Manager','Purchase Manager (Electrical)','Purchase Manager (Mechanical)','VP Purchase','Finance Controller'];
     if(!validRoles.includes(role)) return res.status(400).json({success:false,error:'Invalid role.'});
     if(role==='Admin Control') return res.status(403).json({success:false,error:'Admin Control is managed by superadmin only.'});
-    if(role==='Admin'&&!email.endsWith('@tkelevator.com')) return res.status(400).json({success:false,error:'Admin requires @tkelevator.com email.'});
     if(password.length<6) return res.status(400).json({success:false,error:'Password min 6 characters.'});
     const {data:ex}=await supabase.from('portal_users').select('id').eq('email',email).single();
     if(ex) return res.status(409).json({success:false,error:'Account already exists. Please sign in.'});
@@ -169,6 +170,7 @@ app.post('/api/auth/login', loginLimiter, async (req,res) => {
   try {
     const {email,password}=req.body;
     if(!email||!password) return res.status(400).json({success:false,error:'Email and password required.'});
+    if(!email.toLowerCase().endsWith('@tkelevator.com')) return res.status(401).json({success:false,error:'Only @tkelevator.com accounts allowed.'});
     const {data:user}=await supabase.from('portal_users')
       .select('id,email,name,role,status,password_hash,signature_data')
       .eq('email',email.toLowerCase()).single();
@@ -275,7 +277,8 @@ app.post('/api/admin-control/users/create', async (req,res) => {
     const admin=await verifyAdminControl(req,res); if(!admin) return;
     const email=clean(req.body.email).toLowerCase(), password=req.body.password||'';
     const name=clean(req.body.name), role=clean(req.body.role);
-    const allowed=['Admin','Admin Control','VP Purchase','Finance Controller','Purchase Manager'];
+    if(!email.endsWith('@tkelevator.com')) return res.status(400).json({success:false,error:'Only @tkelevator.com email addresses are allowed.'});
+    const allowed=['Admin','Admin Control','VP Purchase','Finance Controller','Purchase Manager','Purchase Manager (Electrical)','Purchase Manager (Mechanical)'];
     if(!allowed.includes(role)) return res.status(400).json({success:false,error:'Invalid role.'});
     if(password.length<6) return res.status(400).json({success:false,error:'Password min 6 chars.'});
     if(['Admin Control','VP Purchase','Finance Controller'].includes(role)){
@@ -749,6 +752,66 @@ app.get('/api/reference-data/status', async (req,res) => {
     }
 
     res.json({ success: true, ...out });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ── DB USAGE / CAPACITY (for the admin capacity banner) ──
+// Estimates DB size by sampling the heavy table (portal_form_pdfs). PDFs are
+// base64 strings stored inline — each one ~1.3 MB on average. The cap on
+// Supabase free tier is 500 MB. We compute:
+//   - total forms uploaded
+//   - average bytes per stored PDF (sampled from up to 50 rows)
+//   - estimated MB consumed
+//   - remaining forms before the 500 MB cap (using a safety floor at 90%)
+// The frontend shows a banner when fewer than ~15 forms can fit.
+app.get('/api/db-usage', async (req,res) => {
+  try {
+    const FREE_TIER_MB = 500;
+    const SAFETY_THRESHOLD = 0.9;          // warn once we hit 90% of cap
+    const usableBytes = FREE_TIER_MB * 1024 * 1024 * SAFETY_THRESHOLD;
+
+    // Total PDFs (cheap HEAD count)
+    const cnt = await supabase.from('portal_form_pdfs').select('*', { count: 'exact', head: true });
+    const totalForms = (!cnt.error && cnt.count != null) ? cnt.count : 0;
+
+    // Sample row sizes — pulls up to 50 rows to estimate average length
+    let avgBytes = 0;
+    if (totalForms > 0) {
+      const { data: sample } = await supabase.from('portal_form_pdfs')
+        .select('pdf_base64')
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (sample && sample.length) {
+        const lens = sample.map(r => (r.pdf_base64 || '').length);
+        avgBytes = Math.round(lens.reduce((a,b)=>a+b,0) / lens.length);
+      }
+    }
+    if (avgBytes === 0) avgBytes = 200 * 1024; // conservative fallback ~200 KB
+
+    const usedBytes = totalForms * avgBytes;
+    const remainingBytes = Math.max(0, usableBytes - usedBytes);
+    const remainingForms = Math.floor(remainingBytes / avgBytes);
+    const percentUsed = usableBytes > 0 ? Math.min(100, (usedBytes / usableBytes) * 100) : 0;
+
+    let level = 'ok';
+    if (remainingForms <= 5)  level = 'critical';
+    else if (remainingForms <= 15) level = 'warning';
+
+    res.json({
+      success: true,
+      free_tier_mb: FREE_TIER_MB,
+      safety_threshold: SAFETY_THRESHOLD,
+      total_forms: totalForms,
+      avg_bytes_per_form: avgBytes,
+      used_mb: +(usedBytes / 1024 / 1024).toFixed(1),
+      usable_mb: +(usableBytes / 1024 / 1024).toFixed(1),
+      remaining_mb: +(remainingBytes / 1024 / 1024).toFixed(1),
+      remaining_forms: remainingForms,
+      percent_used: +percentUsed.toFixed(1),
+      level,
+    });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
