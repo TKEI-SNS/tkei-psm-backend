@@ -716,6 +716,44 @@ app.get('/api/analytics/forms-list', async (req,res) => {
 // All TKE Cost Approval routes live in ./tke-cost-approval.js
 // ═══════════════════════════════════════════════════════════════
 const { createTkeCostApprovalRouter } = require('./tke-cost-approval');
+// ── REFERENCE DATA STATUS (Info Records + PORV) ──
+// Read-only health check for the two large SAP reference tables.
+// Returns row count and the most recent row date so the user can see
+// how stale the data is without having to open Supabase.
+app.get('/api/reference-data/status', async (req,res) => {
+  try {
+    const out = { info_records: null, porv_data: null };
+
+    // Use HEAD count for efficiency — never pulls actual rows
+    const ir = await supabase.from('info_records_csv').select('*', { count: 'exact', head: true });
+    if (!ir.error) {
+      out.info_records = { count: ir.count || 0, error: null };
+      // Try to read the most recent "Valid to" date — non-fatal if it fails
+      try {
+        const { data } = await supabase
+          .from('info_records_csv')
+          .select('"Valid to"')
+          .order('"Valid to"', { ascending: false, nullsFirst: false })
+          .limit(1);
+        if (data && data[0]) out.info_records.latest = data[0]['Valid to'];
+      } catch(_){}
+    } else {
+      out.info_records = { count: null, error: ir.error.message };
+    }
+
+    const pv = await supabase.from('porv_data_csv').select('*', { count: 'exact', head: true });
+    if (!pv.error) {
+      out.porv_data = { count: pv.count || 0, error: null };
+    } else {
+      out.porv_data = { count: null, error: pv.error.message };
+    }
+
+    res.json({ success: true, ...out });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 app.use('/api/tke', createTkeCostApprovalRouter({ supabase }));
 
 // ─── Production safety: clean 404 + JSON-only error response ──────────────
