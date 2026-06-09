@@ -626,17 +626,40 @@ app.post('/api/analytics/record', async (req,res) => {
     if(!form_no||!item_code) return res.status(400).json({success:false,error:'form_no and item_code required.'});
     const {data:ex}=await supabase.from('form_analytics').select('id').eq('form_no',form_no).eq('item_code',item_code).eq('vendor_code',vendor_code||'').single();
     if(ex) return res.json({success:true,status:'dupe',id:ex.id});
-    const {data,error}=await supabase.from('form_analytics').insert({
-      form_no,form_date:form_date||null,vendor_code:vendor_code||'',vendor_name:vendor_name||'',
-      category:category||'',dept:dept||'',item_code,item_desc:item_desc||'',
-      old_price:parseFloat(old_price)||0,new_price:parseFloat(new_price)||0,
-      delta:parseFloat(delta)||0,pct_diff:parseFloat(pct_diff)||0,
-      qty_per_lift:parseFloat(qty_per_lift)||0,impact:parseFloat(impact)||0,
-      yearly_vol:parseFloat(yearly_vol)||0,quarterly_impact:parseFloat(quarterly_impact)||0,
-      source_file:source_file||'',form_tag:form_tag||''
-    }).select('id').single();
-    if(error) throw error;
-    res.json({success:true,status:'added',id:data.id});
+
+    // Build the insert payload. Try with optional aggregate columns first; if they
+    // don't exist in this Supabase schema, retry without them.
+    const baseRow = {
+      form_no, form_date: form_date||null, vendor_code: vendor_code||'', vendor_name: vendor_name||'',
+      category: category||'', dept: dept||'', item_code, item_desc: item_desc||'',
+      old_price: parseFloat(old_price)||0, new_price: parseFloat(new_price)||0,
+      delta: parseFloat(delta)||0, pct_diff: parseFloat(pct_diff)||0,
+      qty_per_lift: parseFloat(qty_per_lift)||0, impact: parseFloat(impact)||0,
+      source_file: source_file||'', form_tag: form_tag||''
+    };
+    const optionalRow = {
+      ...baseRow,
+      yearly_vol: parseFloat(yearly_vol)||0,
+      quarterly_impact: parseFloat(quarterly_impact)||0,
+    };
+
+    let inserted = null, err = null;
+    // First attempt — include optional aggregate columns
+    {
+      const {data, error} = await supabase.from('form_analytics').insert(optionalRow).select('id').single();
+      if (!error) inserted = data;
+      else err = error;
+    }
+    // Retry without the optional columns if the schema doesn't have them
+    if (!inserted && err && /yearly_vol|quarterly_impact|schema cache/i.test(err.message||'')) {
+      const {data, error} = await supabase.from('form_analytics').insert(baseRow).select('id').single();
+      if (error) throw error;
+      inserted = data;
+    } else if (!inserted) {
+      throw err;
+    }
+
+    res.json({success:true,status:'added',id:inserted.id});
   } catch(e){res.status(500).json({success:false,error:e.message});}
 });
 
