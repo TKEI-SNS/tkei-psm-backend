@@ -719,6 +719,41 @@ app.get('/api/analytics/forms-list', async (req,res) => {
 // All TKE Cost Approval routes live in ./tke-cost-approval.js
 // ═══════════════════════════════════════════════════════════════
 const { createTkeCostApprovalRouter } = require('./tke-cost-approval');
+// ── REFERENCE DATA WIPE (Bearer auth + confirmation phrase — destructive!) ──
+// Deletes ALL rows from the named reference table so admin can re-import a
+// fresh CSV. Three safeguards:
+//  1. Supabase Bearer auth + @tkelevator.com domain (via requireSupabaseAuth)
+//  2. Table name allowlisted — cannot wipe anything else
+//  3. Confirmation phrase must match exactly (server-side check, not just frontend)
+// Returns the number of rows deleted so the UI can show a friendly toast.
+app.post('/api/reference-data/wipe', requireSupabaseAuth, async (req,res) => {
+  try {
+    const { table, confirm } = req.body || {};
+    const ALLOWED = {
+      'info_records_csv': 'WIPE INFO_RECORDS',
+      'porv_data_csv':    'WIPE PORV_DATA',
+    };
+    if (!ALLOWED[table]) return res.status(400).json({success:false,error:'Table not allowed for wipe.'});
+    if (confirm !== ALLOWED[table]) return res.status(400).json({success:false,error:`Confirmation phrase must be exactly: ${ALLOWED[table]}`});
+
+    // Count first so we can report what we deleted (HEAD count is cheap)
+    const cnt = await supabase.from(table).select('*', { count: 'exact', head: true });
+    const before = (!cnt.error && cnt.count != null) ? cnt.count : null;
+
+    // Delete everything. Postgres-via-PostgREST requires a filter; use a tautology.
+    const { error } = await supabase.from(table).delete().not('item_vendor_key','is',null);
+    if (error) {
+      // If item_vendor_key isn't present (shouldn't happen but defensive), try a numeric id fallback
+      const { error: err2 } = await supabase.from(table).delete().gte('ctid','(0,0)');
+      if (err2) throw error;
+    }
+    console.warn(`⚠ Reference data WIPED by ${req.user.email}: ${table} (${before} rows)`);
+    res.json({ success:true, table, rows_deleted: before });
+  } catch (e) {
+    res.status(500).json({ success:false, error:e.message });
+  }
+});
+
 // ── REFERENCE DATA STATUS (Info Records + PORV) ──
 // Read-only health check for the two large SAP reference tables.
 // Returns row count and the most recent row date so the user can see
@@ -751,9 +786,62 @@ app.get('/api/reference-data/status', async (req,res) => {
       out.porv_data = { count: null, error: pv.error.message };
     }
 
+    // Attach most recent import metadata (filename, date) from the imports log
+    // Non-fatal if the table doesn't exist yet — just skip these fields
+    try {
+      for (const tbl of ['info_records_csv','porv_data_csv']) {
+        const { data } = await supabase
+          .from('reference_data_imports')
+          .select('filename, imported_at, rows_after, imported_by')
+          .eq('table_name', tbl)
+          .order('imported_at', { ascending: false })
+          .limit(1);
+        const key = tbl === 'info_records_csv' ? 'info_records' : 'porv_data';
+        if (data && data[0] && out[key]) {
+          out[key].last_import = {
+            filename:    data[0].filename,
+            imported_at: data[0].imported_at,
+            rows_after:  data[0].rows_after,
+            imported_by: data[0].imported_by,
+          };
+        }
+      }
+    } catch(_){}
+
     res.json({ success: true, ...out });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ── REFERENCE DATA IMPORT LOG (Bearer auth) ──
+// Called by the portal when admin tells it "I just imported a new CSV".
+// The portal can't observe the Supabase dashboard import directly, so we
+// take the admin's word for the filename and record it alongside the
+// current row count. Purely informational.
+app.post('/api/reference-data/log-import', requireSupabaseAuth, async (req,res) => {
+  try {
+    const { table, filename } = req.body || {};
+    if (!['info_records_csv','porv_data_csv'].includes(table)) {
+      return res.status(400).json({success:false,error:'Table not allowed.'});
+    }
+    const fn = String(filename||'').trim().slice(0,200);
+    if (!fn) return res.status(400).json({success:false,error:'Filename required.'});
+
+    // Snapshot current row count so the log entry is self-contained
+    const cnt = await supabase.from(table).select('*', { count: 'exact', head: true });
+    const rows = (!cnt.error && cnt.count != null) ? cnt.count : null;
+
+    const { error } = await supabase.from('reference_data_imports').insert({
+      table_name:  table,
+      filename:    fn,
+      rows_after:  rows,
+      imported_by: req.user.email,
+    });
+    if (error) throw error;
+    res.json({ success:true });
+  } catch (e) {
+    res.status(500).json({ success:false, error:e.message });
   }
 });
 
