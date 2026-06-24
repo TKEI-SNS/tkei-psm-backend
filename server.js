@@ -328,7 +328,10 @@ app.get('/api/portal-forms', async (req,res) => {
     `).order('uploaded_at',{ascending:false});
     if(error) throw error;
     res.json({success:true,forms:data||[]});
-  } catch(e){res.status(500).json({success:false,error:e.message});}
+  } catch(e){
+    console.error('[/api/portal-forms] failed:', e.message);
+    res.status(500).json({success:false,error:e.message});
+  }
 });
 
 app.get('/api/portal-forms/:id', async (req,res) => {
