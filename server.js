@@ -669,7 +669,10 @@ app.post('/api/analytics/record', async (req,res) => {
 app.get('/api/analytics/records', async (req,res) => {
   try {
     const {vendor,item,from,to}=req.query;
-    let q=supabase.from('form_analytics').select('*').order('form_date',{ascending:false});
+    // Use .range(0, 9999) to override PostgREST's default per-request row cap
+    // (Supabase often defaults to 1000, some configs to 50). We need every row
+    // for the Analyze and Forms views to be complete.
+    let q=supabase.from('form_analytics').select('*').order('form_date',{ascending:false}).range(0, 9999);
     if(vendor) q=q.ilike('vendor_code',`%${vendor}%`);
     if(item)   q=q.ilike('item_code',`%${item}%`);
     if(from)   q=q.gte('form_date',from);
@@ -787,56 +790,22 @@ app.get('/api/reference-data/status', async (req,res) => {
     }
 
     // Attach most recent import metadata (filename, date) from the imports log
-    // Auto-detect imports by row-count growth, then attach latest import metadata.
-    // No manual filename entry — the portal can't observe Supabase dashboard imports
-    // directly, but it CAN detect that the row count grew between status checks
-    // and stamp a fresh log entry. All wrapped in try/catch so a missing
-    // reference_data_imports table never breaks the endpoint.
+    // Non-fatal if the table doesn't exist yet — just skip these fields
     try {
-      let actorEmail = null;
-      const token = (req.headers.authorization || '').startsWith('Bearer ')
-        ? req.headers.authorization.slice(7) : null;
-      if (token) {
-        try { const { data } = await supabase.auth.getUser(token); actorEmail = data?.user?.email || null; } catch(_){}
-      }
       for (const tbl of ['info_records_csv','porv_data_csv']) {
+        const { data } = await supabase
+          .from('reference_data_imports')
+          .select('filename, imported_at, rows_after, imported_by')
+          .eq('table_name', tbl)
+          .order('imported_at', { ascending: false })
+          .limit(1);
         const key = tbl === 'info_records_csv' ? 'info_records' : 'porv_data';
-        const currentCount = out[key]?.count;
-        if (currentCount == null) continue;
-
-        // Find the latest log entry for this table
-        const { data: latest } = await supabase
-          .from('reference_data_imports')
-          .select('imported_at, rows_after, imported_by')
-          .eq('table_name', tbl)
-          .order('imported_at', { ascending: false })
-          .limit(1);
-        const last = latest && latest[0];
-
-        // Stamp a new entry if row count meaningfully grew (>100 rows added)
-        const grew = !last || (currentCount - (last.rows_after || 0)) > 100;
-        if (grew && currentCount > 0) {
-          try {
-            await supabase.from('reference_data_imports').insert({
-              table_name:  tbl,
-              rows_after:  currentCount,
-              imported_by: actorEmail || 'auto-detected',
-            });
-          } catch(_){ /* table may not exist yet — non-fatal */ }
-        }
-
-        // Re-read latest after potential insert
-        const { data: fresh } = await supabase
-          .from('reference_data_imports')
-          .select('imported_at, rows_after, imported_by')
-          .eq('table_name', tbl)
-          .order('imported_at', { ascending: false })
-          .limit(1);
-        if (fresh && fresh[0] && out[key]) {
+        if (data && data[0] && out[key]) {
           out[key].last_import = {
-            imported_at: fresh[0].imported_at,
-            rows_after:  fresh[0].rows_after,
-            imported_by: fresh[0].imported_by,
+            filename:    data[0].filename,
+            imported_at: data[0].imported_at,
+            rows_after:  data[0].rows_after,
+            imported_by: data[0].imported_by,
           };
         }
       }
