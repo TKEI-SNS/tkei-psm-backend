@@ -368,7 +368,7 @@ ${fxActive ? `
   </tbody>
 </table>
 
-<div class="footnote">All Costs are in INR</div>
+<div class="footnote">${fxActive ? "Item values in native currency (NCY) — INR conversions shown above" : "All Costs are in INR"}</div>
 
 <div class="signatures">
   <div class="sig"><div class="line"><span class="label">Signature</span></div><div>Prepared By</div><div class="name">${esc(meta.prepared_by || "—")}</div></div>
@@ -377,7 +377,7 @@ ${fxActive ? `
   <div class="sig"><div class="line"><span class="label">Signature</span></div><div>Approved By</div><div class="name">${esc(meta.approved_by_finance || "Finance Controller")}</div></div>
 </div>
 
-<div class="footnote">All amounts in Indian Rupees ₹</div>
+<div class="footnote">${fxActive ? "Amounts in NCY — INR conversions as noted" : "All amounts in Indian Rupees ₹"}</div>
 
 <div class="page-break"></div>
 
@@ -412,7 +412,7 @@ ${fxActive ? `
   &nbsp;&nbsp;&nbsp; Converted Yearly (INR): <b class="${totalImpactINR * 4 < 0 ? "neg" : ""}">₹${fmt(totalImpactINR * 4)}</b></div>` : ""}
 </div>
 
-<div class="footnote">All amounts in Indian Rupees ₹</div>
+<div class="footnote">${fxActive ? "Amounts in NCY — INR conversions as noted" : "All amounts in Indian Rupees ₹"}</div>
 
 <!-- Machine-readable block for Cost Analyzer portal. White text, 0.5pt — invisible to humans but in PDF text layer. -->
 <pre class="tke-parse">${parseBlock}</pre>
