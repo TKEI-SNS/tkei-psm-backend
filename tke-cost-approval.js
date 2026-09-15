@@ -119,7 +119,28 @@ function renderFormHtml(meta, items) {
   const totalDelta = items.reduce((s, i) => s + (Number(i.price_diff) || 0), 0);
   const totalYearlyVol = items.reduce((s, i) => s + (Number(i.quantity) || 0), 0);
 
-  const mainRows = items.map((it) => `
+  // ── Currency conversion (for Excels quoted in NCY — native currency) ──
+  // Both factors default to 1 (no conversion). When either is set > 1 on the
+  // metadata screen, page 1 shows the FX line and the INR-converted total:
+  //   INR total = NCY total × conversion_factor × exchange_factor
+  const convF = Number(meta.conversion_factor) > 0 ? Number(meta.conversion_factor) : 1;
+  const exchF = Number(meta.exchange_factor)   > 0 ? Number(meta.exchange_factor)   : 1;
+  const fxActive = convF !== 1 || exchF !== 1;
+  const fxMult = convF * exchF;
+  const totalImpactINR = totalImpact * fxMult;
+  const totalDeltaINR  = totalDelta  * fxMult;
+
+  // ── Page 1 shows only the TOP 2 items by absolute impact ──
+  // The full list always lives in the Annexure. Ties broken by |price_diff|.
+  const top2 = [...items]
+    .sort((a, b) => {
+      const ia = Math.abs(Number(a.impact) || 0), ib = Math.abs(Number(b.impact) || 0);
+      if (ib !== ia) return ib - ia;
+      return Math.abs(Number(b.price_diff) || 0) - Math.abs(Number(a.price_diff) || 0);
+    })
+    .slice(0, 2);
+
+  const mainRows = top2.map((it) => `
     <tr>
       <td class="c">${dash(it.old_item_code)}</td>
       <td class="c">${dash(it.old_description)}</td>
@@ -130,7 +151,13 @@ function renderFormHtml(meta, items) {
       <td class="r delta">${fmt(it.price_diff)}</td>
       <td class="r">${it.quantity}</td>
       <td class="r impact">${fmt(it.impact)}</td>
-    </tr>`).join("");
+    </tr>`).join("")
+    + (items.length > 2 ? `
+    <tr>
+      <td colspan="9" class="c" style="font-style:italic;color:#666;">
+        + ${items.length - 2} more item${items.length - 2 === 1 ? "" : "s"} — see Annexure for the full list
+      </td>
+    </tr>` : "");
 
   const annexRows = items.map((it, idx) => {
     const oldP = Number(it.old_price) || 0;
@@ -196,6 +223,9 @@ function renderFormHtml(meta, items) {
     `total_quarterly_impact=${n(totalImpact)}`,
     `total_yearly_impact=${n(totalImpact*4)}`,
     `avg_pct_diff=${n(avgPct)}`,
+    `conversion_factor=${n(convF)}`,
+    `exchange_factor=${n(exchF)}`,
+    `total_quarterly_impact_inr=${n(totalImpactINR)}`,
   ].join("|");
 
   const parseItems = items.map((it, idx) => {
@@ -316,12 +346,15 @@ function renderFormHtml(meta, items) {
 <div class="kv"><b>Supplier</b> ${vendorCell}</div>
 <div class="kv"><b>Details of Change</b> ${dash(meta.details_of_change)}</div>
 <div class="kv"><b>Product Line Impacted</b> ${dash(meta.product_line_impacted)}</div>
+${fxActive ? `
+<div class="kv"><b>Currency Conversion (NCY → INR)</b> Conversion Factor: ${convF} &nbsp;·&nbsp; Exchange Factor: ${exchF} &nbsp;·&nbsp; Multiplier: ${fmt(fxMult)}</div>` : ""}
 
 <div class="totals-line">
-  <b>Cost Impact per Lift:</b> ${fmt(totalDelta)}
+  <b>Cost Impact per Lift:</b> ${fmt(totalDelta)}${fxActive ? ` NCY &nbsp;(<b>₹${fmt(totalDeltaINR)}</b> INR)` : ""}
   &nbsp;&nbsp;&nbsp;&nbsp;
   <b>Quarterly Impact (Approx):</b>
-  <span class="${totalImpact < 0 ? "neg" : ""}">${fmt(totalImpact)}</span> INR
+  <span class="${totalImpact < 0 ? "neg" : ""}">${fmt(totalImpact)}</span> ${fxActive ? "NCY" : "INR"}${fxActive ? `
+  &nbsp;→&nbsp; <b>Converted (INR):</b> <span class="${totalImpactINR < 0 ? "neg" : ""}">₹${fmt(totalImpactINR)}</span>` : ""}
 </div>
 
 <h2 class="section">Cost Impact Analysis</h2>
@@ -373,8 +406,10 @@ function renderFormHtml(meta, items) {
 <div class="annexure-summary">
   <div>Avg % Price Diff: <b class="${avgPct < 0 ? "neg" : ""}">${pct(avgPct)}</b>
   &nbsp;&nbsp;&nbsp; Total Yearly Vol: <b>${totalYearlyVol}</b></div>
-  <div>Total Quarterly Impact (INR): <b class="${totalImpact < 0 ? "neg" : ""}">${fmt(totalImpact)}</b></div>
-  <div>Total Yearly Impact (INR): <b class="${totalImpact * 4 < 0 ? "neg" : ""}">${fmt(totalImpact * 4)}</b></div>
+  <div>Total Quarterly Impact ${fxActive ? "(NCY)" : "(INR)"}: <b class="${totalImpact < 0 ? "neg" : ""}">${fmt(totalImpact)}</b></div>
+  <div>Total Yearly Impact ${fxActive ? "(NCY)" : "(INR)"}: <b class="${totalImpact * 4 < 0 ? "neg" : ""}">${fmt(totalImpact * 4)}</b></div>${fxActive ? `
+  <div>Converted Quarterly Impact (INR): <b class="${totalImpactINR < 0 ? "neg" : ""}">₹${fmt(totalImpactINR)}</b>
+  &nbsp;&nbsp;&nbsp; Converted Yearly (INR): <b class="${totalImpactINR * 4 < 0 ? "neg" : ""}">₹${fmt(totalImpactINR * 4)}</b></div>` : ""}
 </div>
 
 <div class="footnote">All amounts in Indian Rupees ₹</div>
@@ -433,6 +468,7 @@ const EDITABLE = [
   "part_new", "part_existing", "part_other",
   "supplier", "details_of_change", "product_line_impacted",
   "checked_by", "approved_by_vp", "approved_by_finance",
+  "conversion_factor", "exchange_factor",
   "status",
 ];
 
